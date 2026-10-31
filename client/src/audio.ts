@@ -173,6 +173,12 @@ export const sfx = {
   },
   /** The Opp's echo screech: a falling shriek. */
   screech(vol = 1) { tone(1400, 0.5, 'sawtooth', 0.12 * vol, -1100, { verb: 0.6 }); tone(900, 0.4, 'square', 0.06 * vol, -600, { delay: 0.09, verb: 0.6 }); },
+  /** A vent grate clanking. */
+  vent(vol = 1, pan = 0) {
+    tone(220, 0.08, 'square', 0.14 * vol, -80, { pan, verb: 0.5 });
+    tone(160, 0.1, 'square', 0.12 * vol, -60, { pan, delay: 0.09, verb: 0.5 });
+    noise(0.12, 2200, 3, 0.18 * vol, { pan, delay: 0.2, verb: 0.5 });
+  },
   ping() { tone(1800, 0.08, 'sine', 0.06, 0, { verb: 0.4 }); },
   lunge() { tone(160, 0.25, 'sawtooth', 0.12, 260); noise(0.25, 800, 0.8, 0.1, { sweep: 2000 }); },
   /** A heartbeat thump; louder when a bro is close. */

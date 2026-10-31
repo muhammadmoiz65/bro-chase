@@ -203,3 +203,13 @@ export function overFence(x: number, y: number, R: number): boolean {
   return false;
 }
 
+
+/** Vent (manhole) centres: one on the street corner of every plot, plaza included. */
+export function ventsFor(R: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < (2 * R + 1) ** 2; i++) {
+    const [cx, cy] = plotCenter(i);
+    out.push([cx + 5.5, cy + 5.5]);
+  }
+  return out;
+}

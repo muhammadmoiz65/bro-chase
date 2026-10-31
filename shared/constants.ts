@@ -191,3 +191,13 @@ export const MONSTER = {
   senseRange: 9, // the heartbeat gets stronger as a bro gets closer than this
   maxBots: 16,
 };
+
+/** Vents: one manhole per block. Opps (players and AI) crawl in and pop out somewhere else. */
+export const VENT = {
+  useRange: 1.4, // tiles from the grate centre
+  travelSec: 1.6, // time underground; the exit grate rattles the whole time
+  cd: 10, // seconds between trips
+  maxHop: 3, // plots: the farthest a trip can go
+  noise: 10, // clank radius at both grates
+  aiMinGain: 14, // tiles an AI must save before it bothers
+};

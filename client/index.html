@@ -98,7 +98,7 @@
             <li><kbd>R</kbd> hold to repair your doors and defences</li>
             <li><kbd>Y</kbd>/<kbd>N</kbd> answer a knock, <kbd>Tab</kbd> scoreboard, <kbd>Enter</kbd> chat</li>
           </ul>
-          <p>Want to hunt instead? Pick <b>Opp</b> above. You're blind but you hear everything: <kbd>Q</kbd> screech to ping nearby bros, <kbd>Space</kbd> to lunge, <kbd>E</kbd> to smash doors. There's one Opp slot per 4 bros; bot bros fill in if there aren't enough players, and the AI takes any slot nobody picked.</p>
+          <p>Want to hunt instead? Pick <b>Opp</b> above. You're blind but you hear everything: <kbd>Q</kbd> screech to ping nearby bros, <kbd>Space</kbd> to lunge, <kbd>E</kbd> to smash doors, <kbd>V</kbd> on a manhole to crawl through the vents. Bros: a rattling manhole means an Opp is about to pop out. There's one Opp slot per 4 bros; bot bros fill in if there aren't enough players, and the AI takes any slot nobody picked.</p>
           <p>Got caught? You're in <b>NPC mode</b>. A living bro standing next to you for 3 seconds brings you back. Survive until the timer runs out to touch grass.</p>
         </div>
       </div>
@@ -148,6 +148,7 @@
       <div id="hunter" class="hidden">
         <div class="ability" id="ab-screech"><kbd>Q</kbd> SCREECH <b></b><i></i></div>
         <div class="ability" id="ab-lunge"><kbd>Space</kbd> LUNGE <b></b><i></i></div>
+        <div class="ability" id="ab-vent"><kbd>V</kbd> VENT <b></b><i></i></div>
         <div class="ability" id="ab-smash"><kbd>E</kbd> SMASH DOOR</div>
       </div>
       <div id="queued" class="hidden"></div>
@@ -178,6 +179,7 @@
       <div><kbd>WASD</kbd> stalk</div>
       <div><kbd>Q</kbd> screech: pings every bro nearby</div>
       <div><kbd>Space</kbd> lunge (short burst)</div>
+      <div><kbd>V</kbd> on a vent: crawl through (hold a direction)</div>
       <div><kbd>E</kbd> smash a door or defence</div>
       <div><kbd>+</kbd> <kbd>-</kbd> camera zoom</div>
       <div><kbd>Tab</kbd> scores · <kbd>Enter</kbd> chat</div>
@@ -196,6 +198,7 @@
         <ul class="intro-rules">
           <li>Every footstep, sprint, knock and repair makes a <b>ripple</b>. Red arrows at the screen edge point to noise you can't see yet.</li>
           <li><kbd>Q</kbd> <b>Screech</b>: bounces off every bro nearby and marks where they are for a few seconds. They hear it too.</li>
+          <li><kbd>V</kbd> on a <b>vent</b> grate: crawl through the sewers and pop out up to 3 blocks away, in the direction you hold. Both grates clank, so bros get a warning.</li>
           <li><kbd>Space</kbd> <b>Lunge</b> to close the gap. <kbd>E</kbd> smashes crib doors and defences.</li>
           <li>The red glow and heartbeat get stronger when a bro is close. Touch a bro to catch them.</li>
           <li>Ring lights stun you and banana peels trip you. Catch every bro before sunrise to win.</li>
@@ -264,6 +267,7 @@
         <button data-act="shop">SHOP</button>
         <button data-act="item1">BANANA</button>
         <button data-act="screech" class="opp-only">SCREECH</button>
+        <button data-act="vent" class="opp-only">VENT</button>
       </div>
     </div>
   </div>

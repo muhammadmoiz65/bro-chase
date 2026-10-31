@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { DOOR_LEVEL_HP, PLOT, RING_LIGHT_RANGE } from '../../shared/constants.ts';
 import { applyGear, makeDefence, makeDoor, tickUpgrades } from './upgrades.ts';
-import { cellAt, doorCenter, plotCenter, type CribView } from '../../shared/world.ts';
+import { cellAt, doorCenter, plotCenter, ventsFor, type CribView } from '../../shared/world.ts';
 import type { DefView, DropView, EntView, PropView, WorldEvents } from '../../shared/protocol.ts';
 import { FX } from './fx/index.ts';
 import { DEFAULT_LOOK, parseLook } from '../../shared/look.ts';
@@ -136,6 +136,7 @@ export class Renderer {
   private defs = new Map<number, { g: THREE.Group; bar: THREE.Mesh; lv: number; k: string }>();
   private shots: Array<{ m: THREE.Object3D; born: number }> = [];
   private ripples: Array<{ mesh: THREE.Mesh; born: number; r: number; life?: number }> = [];
+  private vents: Array<{ g: THREE.Group; x: number; y: number; until: number }> = [];
   private blips: Array<{ g: THREE.Object3D; born: number; life: number }> = [];
   private seenNoise = new Set<number>();
   private floaters: Array<{ s: THREE.Sprite; born: number }> = [];
@@ -284,6 +285,27 @@ export class Renderer {
     const fenceMat = new THREE.MeshStandardMaterial({ color: 0x8a6a4a, roughness: 0.8 });
     inst(new THREE.BoxGeometry(1, 0.55, 0.12), fenceMat, fencesH, 0.3);
     inst(new THREE.BoxGeometry(0.12, 0.55, 1), fenceMat, fencesV, 0.3);
+
+    // vent grates (manholes) the Opps crawl through
+    this.vents = [];
+    const grateGeo = new THREE.CylinderGeometry(0.62, 0.62, 0.06, 18);
+    const grateMat = new THREE.MeshStandardMaterial({ color: 0x3b3f4a, metalness: 0.6, roughness: 0.5 });
+    const slotMat = new THREE.MeshStandardMaterial({ color: 0x0b0c10 });
+    for (const [vx, vy] of ventsFor(R)) {
+      const g = new THREE.Group();
+      const disc = new THREE.Mesh(grateGeo, grateMat);
+      disc.position.y = 0.03;
+      disc.receiveShadow = true;
+      g.add(disc);
+      for (let k = -2; k <= 2; k++) {
+        const slot = new THREE.Mesh(new THREE.BoxGeometry(0.9 - Math.abs(k) * 0.18, 0.02, 0.07), slotMat);
+        slot.position.set(0, 0.065, k * 0.2);
+        g.add(slot);
+      }
+      g.position.set(vx, 0, vy);
+      this.worldGroup.add(g);
+      this.vents.push({ g, x: vx, y: vy, until: 0 });
+    }
 
     // street lamps
     const poleGeo = new THREE.CylinderGeometry(0.06, 0.08, 2.6, 6);
@@ -719,6 +741,13 @@ export class Renderer {
     return { sx: (v.x + 1) / 2 * window.innerWidth, sy: (1 - v.y) / 2 * window.innerHeight, behind: v.z > 1 };
   }
 
+  /** A grate rattles (Opp coming through) for a moment. */
+  rattleVent(x: number, y: number, ms = 1700) {
+    let best: { g: THREE.Group; x: number; y: number; until: number } | null = null, bd = 1.5;
+    for (const v of this.vents) { const d = Math.hypot(v.x - x, v.y - y); if (d < bd) { bd = d; best = v; } }
+    if (best) best.until = performance.now() + ms;
+  }
+
   zoomBy(d: number) { this.zoom = Math.max(0.55, Math.min(1.7, this.zoom + d)); }
 
   /** Draw a frame. `ents` are already interpolated. */
@@ -886,6 +915,12 @@ export class Renderer {
       (r.mesh.material as THREE.MeshBasicMaterial).opacity = (r.mesh.userData.o ?? 0.6) * (1 - age);
       return true;
     });
+    for (const v of this.vents) {
+      if (t < v.until) {
+        v.g.position.y = 0.04 + Math.abs(Math.sin(t / 35)) * 0.12;
+        v.g.rotation.y = Math.sin(t / 50) * 0.2;
+      } else if (v.g.position.y !== 0) { v.g.position.y = 0; v.g.rotation.y = 0; }
+    }
     this.blips = this.blips.filter((b) => {
       const age = (t - b.born) / b.life;
       if (age >= 1) { b.g.removeFromParent(); return false; }

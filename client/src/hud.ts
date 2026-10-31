@@ -2,7 +2,7 @@
 // Everything user-written is set with textContent, never innerHTML.
 
 import type { FeedItem, LobbyInfo, Phase, Role, ScoreRow, SelfView, WorldEvents } from '../../shared/protocol.ts';
-import { DEF, DEF_KINDS, DEFENCE, GEAR, MONSTER, SHOP, type DefKind, type ShopId } from '../../shared/constants.ts';
+import { DEF, DEF_KINDS, DEFENCE, GEAR, MONSTER, VENT, SHOP, type DefKind, type ShopId } from '../../shared/constants.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -236,6 +236,8 @@ export class Hud {
     };
     ab('ab-screech', you.scr ?? 0, MONSTER.screechCd);
     ab('ab-lunge', you.lun ?? 0, MONSTER.lungeCd);
+    ab('ab-vent', you.vcd ?? 0, VENT.cd + VENT.travelSec);
+    if (you.vnt) $('ab-vent').querySelector('b')!.textContent = 'CRAWLING';
     $('heartbeat').style.opacity = String(Math.min(0.9, (you.sense ?? 0) * 1.1));
   }
 
