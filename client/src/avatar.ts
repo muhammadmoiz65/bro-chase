@@ -47,12 +47,10 @@ const HEAD_R = 0.22;
 const HIP_Y = 0.44;
 const SHOULDER_Y = 0.88;
 
-function jerseyTexture(bg: number): THREE.CanvasTexture {
+function jerseyTexture(): THREE.CanvasTexture {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const ctx = c.getContext('2d')!;
-  ctx.fillStyle = `#${bg.toString(16).padStart(6, '0')}`;
-  ctx.fillRect(0, 0, 64, 64);
   ctx.fillStyle = '#ffffff';
   ctx.font = '900 34px Arial Black, Arial, sans-serif';
   ctx.textAlign = 'center';
@@ -113,12 +111,19 @@ export function buildAvatar(look: Look): Avatar {
   const style = look.top;
   const puffer = style === 4;
   const bodyRadius = puffer ? 0.31 : 0.26;
-  const torsoMat = style === 3 ? std(0xffffff, 0.7, { map: jerseyTexture(topC) }) : top;
-  if (style === 3) mats.push(torsoMat);
-  const body = mesh(new THREE.CapsuleGeometry(bodyRadius, 0.26, 4, 12), torsoMat);
+  const body = mesh(new THREE.CapsuleGeometry(bodyRadius, 0.26, 4, 12), top);
   body.position.y = 0.66;
-  if (style === 3) body.rotation.y = -Math.PI / 2; // put the number on the front
   group.add(body);
+  if (style === 3) {
+    // jersey: the number 67 on the chest
+    const num = mesh(
+      new THREE.PlaneGeometry(0.26, 0.26),
+      new THREE.MeshStandardMaterial({ map: jerseyTexture(), transparent: true, roughness: 0.7 }),
+    );
+    num.castShadow = false;
+    num.position.set(0, 0.7, bodyRadius + 0.004);
+    group.add(num);
+  }
   // hips in pants colour
   const hips = mesh(new THREE.CylinderGeometry(0.22, 0.2, 0.12, 12), pants);
   hips.position.y = HIP_Y + 0.02;

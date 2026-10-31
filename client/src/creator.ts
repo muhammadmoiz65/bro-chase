@@ -36,7 +36,7 @@ export class Creator {
   private avatar: Avatar | null = null;
   private turntable = new THREE.Group();
   private raf = 0;
-  private spin = 0.6;
+  private spin = 0.5;
   private drag: { x: number; rot: number } | null = null;
   private onSave: ((look: Look) => Promise<void>) | null = null;
   private onClose: (() => void) | null = null;
@@ -51,8 +51,8 @@ export class Creator {
     document.getElementById('creator-save')!.onclick = () => void this.save();
     document.getElementById('creator-cancel')!.onclick = () => this.close();
 
-    this.camera.position.set(0, 1.1, 4.4);
-    this.camera.lookAt(0, 0.85, 0);
+    this.camera.position.set(0, 1.25, 3.3);
+    this.camera.lookAt(0, 0.8, 0);
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x6a6080, 1.6));
     const key = new THREE.DirectionalLight(0xffffff, 2.2);
     key.position.set(2, 4, 3);
