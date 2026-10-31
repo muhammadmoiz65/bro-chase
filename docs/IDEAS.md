@@ -10,8 +10,10 @@ Status: 💡 new · 👍 Moiz likes it · 🚧 being built · ✅ shipped · ❌
 
 | Idea | How it makes the game better | Status |
 | --- | --- | --- |
-| Instance and merge static scenery (houses, trees, cars, lamps) | Far fewer draw calls, so higher FPS on laptops and phones | 💡 |
-| Graphics quality setting (Low / Medium / High) with auto-detect | Weak devices stay smooth, strong ones look great | 💡 |
+| Instance and merge static scenery (houses, trees, cars, lamps) | Far fewer draw calls, so higher FPS on laptops and phones | ✅ |
+| Graphics quality setting (Low / Medium / High) with auto-detect | Weak devices stay smooth, strong ones look great | ✅ auto, `?fx=0/1/2` to force; a menu toggle is still 💡 |
+| Rigged, animated character models (CC0) for bros and Opps that still take the custom look | Characters stop looking like stacked shapes; biggest remaining visual gap | 💡 |
+| Real models for street props (lamps, manholes, benches, bins) and crib walls with windows | The play area matches the new town around it | 💡 |
 | FPS counter toggle (F3) | Makes slowdowns easy to spot and report | 💡 |
 | Day-to-sunset sky over the night | The night feels like it moves forward, while the game stays bright | 💡 |
 | Weather events (rain puddles, wind) as short modes | More variety, and rain can hide footsteps for a moment | 💡 |

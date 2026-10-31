@@ -25,6 +25,9 @@
 - 2026-10-31: **Bright game.** Only power cuts are dark. Moiz asked twice that it not be dark.
 - 2026-10-31: Power cuts are **random and last 10 to 20 seconds**, with smooth transitions. Other short random modes too (fog, rage, low gravity, disco, aura rain).
 - 2026-10-31: **More realistic look and better graphics** are an ongoing goal (grass, roads, trees, cars, animated characters, post-processing).
+- 2026-10-31: Moiz said "graphics are too bad". Art direction: **one cohesive low-poly cartoon style** using real models.
+  Models come from **CC0** libraries only (Kenney first; credits in `client/public/models/LICENSE.md`). Only raw GitHub is reachable from the build machines,
+  so Kenney's open-source starter kits on GitHub are the source. Primitive boxes are being replaced step by step.
 - 2026-10-31: **Every crib has a different design.**
 - 2026-10-31: Upgrades **change the look** at every level (doors, defences, kicks, armour).
 

@@ -8,6 +8,7 @@ import { cellAt, doorCenter, plotCenter, ventsFor, type CribView } from '../../s
 import type { DefView, DropView, EntView, PropView, WorldEvents } from '../../shared/protocol.ts';
 import { FX } from './fx/index.ts';
 import { addWallCaps, brickTexture, dressWorld } from './fx/world.ts';
+import { groundOcclusion, rimAll } from './fx/ao.ts';
 import { DEFAULT_LOOK, parseLook } from '../../shared/look.ts';
 import { buildAvatar, type Avatar } from './avatar.ts';
 
@@ -43,22 +44,6 @@ function textSprite(text: string, color = '#ffffff', size = 48, bg = 'rgba(0,0,0
   s.scale.set(c.width * scale * 0.9, c.height * scale * 0.9, 1);
   s.renderOrder = 10;
   return s;
-}
-
-/** Soft radial glow used for fake light pools on the ground. */
-function glowTexture(color: string): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const ctx = c.getContext('2d')!;
-  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-  g.addColorStop(0, color);
-  g.addColorStop(0.35, color + '99');
-  g.addColorStop(1, color + '00');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 128, 128);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
 }
 
 function noiseTexture(base: string, speck: string, n: number, lines = false): THREE.CanvasTexture {
@@ -136,8 +121,6 @@ export class Renderer {
   private selfLight: THREE.PointLight;
   private ringLights: THREE.PointLight[] = [];
   private lampHeadMat = new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffa040, emissiveIntensity: 2 });
-  private lampPoolGeo = new THREE.CircleGeometry(3.2, 32);
-  private lampPoolMat = new THREE.MeshBasicMaterial({ map: glowTexture('#ffb36b'), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
   private worldGroup = new THREE.Group();
   private builtR = -1;
   private lamps: THREE.Vector3[] = [];
@@ -253,7 +236,7 @@ export class Renderer {
       }
     }
 
-    const wallMat = new THREE.MeshStandardMaterial({ map: brickTexture(), roughness: 0.88 });
+    const wallMat = groundOcclusion(new THREE.MeshStandardMaterial({ map: brickTexture(), roughness: 0.88 }), 0.5, 0.9);
     const inst = (geo: THREE.BufferGeometry, mat: THREE.Material, cells: Array<[number, number]>, y: number) => {
       const m = new THREE.InstancedMesh(geo, mat, Math.max(1, cells.length));
       m.count = cells.length;
@@ -282,8 +265,8 @@ export class Renderer {
       m.receiveShadow = true;
       this.worldGroup.add(m);
     }
-    inst(new THREE.BoxGeometry(1, 2.4, 1), new THREE.MeshStandardMaterial({ color: 0x4a5062 }), bounds, 1.2);
-    inst(new THREE.CylinderGeometry(0.35, 0.4, 2.2, 10), new THREE.MeshStandardMaterial({ color: 0x5b5f73 }), pillars, 1.1);
+    inst(new THREE.BoxGeometry(1, 2.4, 1), groundOcclusion(new THREE.MeshStandardMaterial({ color: 0x4a5062 })), bounds, 1.2);
+    inst(new THREE.CylinderGeometry(0.35, 0.4, 2.2, 10), groundOcclusion(new THREE.MeshStandardMaterial({ color: 0x5b5f73 })), pillars, 1.1);
     const fenceMat = new THREE.MeshStandardMaterial({ color: 0x8a6a4a, roughness: 0.8 });
     inst(new THREE.BoxGeometry(1, 0.55, 0.12), fenceMat, fencesH, 0.3);
     inst(new THREE.BoxGeometry(0.12, 0.55, 1), fenceMat, fencesV, 0.3);
@@ -319,11 +302,7 @@ export class Renderer {
       const head = new THREE.Mesh(headGeo, this.lampHeadMat);
       head.position.copy(p);
       this.lampHeads.push(head);
-      const pool = new THREE.Mesh(this.lampPoolGeo, this.lampPoolMat);
-      pool.rotation.x = -Math.PI / 2;
-      pool.position.set(p.x, 0.03, p.z);
-      pool.renderOrder = 1;
-      this.worldGroup.add(pole, head, pool);
+      this.worldGroup.add(pole, head);
     }
 
     // crib floors for every plot
@@ -478,6 +457,7 @@ export class Renderer {
   private makeBro(e: EntView): BroMesh {
     const group = new THREE.Group();
     const avatar = buildAvatar(parseLook(e.lk) ?? DEFAULT_LOOK);
+    rimAll(avatar.group, 0xfff4e0, 0.45);
     const body = avatar.body;
     // the ring light: a glowing halo over the head
     const ring = new THREE.Mesh(
@@ -552,6 +532,7 @@ export class Renderer {
     label.position.y = 2.8;
     group.add(body, pocket, head, hood, slit, chest, label);
     this.scene.add(group);
+    rimAll(group, 0xff2050, 0.9, 2);
     return { group, armL, armR, chest, body };
   }
 
@@ -785,8 +766,6 @@ export class Renderer {
     this.moon.intensity += (moonTarget - this.moon.intensity) * 0.06;
     this.hemi.color.lerp(this.tmpColor.setHex(ev.rage ? 0xff8090 : 0xdfe8ff), 0.05);
     this.lampHeadMat.emissiveIntensity = ev.power ? 2 : 0.05;
-    // street lamps light the ground with cheap glow decals instead of real lights
-    this.lampPoolMat.opacity += ((ev.power ? 0.16 : 0) - this.lampPoolMat.opacity) * 0.08;
 
     // doors glide to their target height
     for (const d of this.doors.values()) {
