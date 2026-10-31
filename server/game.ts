@@ -302,7 +302,9 @@ export class Room {
 
   private claimCrib(p: Player, i: number) {
     if (p.crib >= 0) this.releaseCrib(p);
-    const fresh = (): Door => ({ hp: DOOR.maxHp, open: false, openUntil: 0 });
+    // doors start "open, closing now": stepDoors shuts them this tick unless someone is standing in
+    // the doorway (the bro who just walked in, or a friend behind them), so nobody gets stuck in a wall
+    const fresh = (): Door => ({ hp: DOOR.maxHp, open: true, openUntil: 0 });
     this.cribs.set(i, { owner: p.id, ownerName: p.name, doors: [fresh(), fresh()], level: 0, autorepair: false, defLv: { blaster: 1, lamp: 1, bass: 1 } });
     p.crib = i;
     this.ensureRoom();
@@ -869,7 +871,8 @@ export class Room {
         continue;
       }
       if (d.cd > 0) continue;
-      const targets = hunters.filter((h) => t >= h.stunUntil && dist(h.x, h.y, d.x, d.y) < range);
+      // a grace window after every stun so a stack of turrets can't keep an Opp frozen all night
+      const targets = hunters.filter((h) => t >= h.stunUntil + DEF.stunGraceSec && dist(h.x, h.y, d.x, d.y) < range);
       if (!targets.length) continue;
       const h = targets.sort((a, b) => dist(a.x, a.y, d.x, d.y) - dist(b.x, b.y, d.x, d.y))[0];
       if (d.k === 'blaster') {
@@ -1020,6 +1023,7 @@ export class Room {
     this.broadcast({ t: 'result', win, night: this.night, mvp });
     this.broadcast({ t: 'scores', rows: this.scoreRows() });
     this.feed.push({ k: 'info', text: win ? 'W. The bros touched grass.' : 'L + ratio. The Opps won.' });
+    if (this.ev.mode) this.endMode(); // sunrise: no power cut or fog over the results screen
     this.setPhase('touchgrass');
   }
 

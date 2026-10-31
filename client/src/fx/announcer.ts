@@ -6,7 +6,7 @@
 import { sfx } from '../audio.ts';
 
 const CSS = `
-#announcer { position: fixed; left: 0; right: 0; top: 17%; display: flex; flex-direction: column; align-items: center;
+#announcer { position: fixed; left: 0; right: 0; top: max(160px, 22%); display: flex; flex-direction: column; align-items: center;
   pointer-events: none; z-index: 40; gap: 6px; }
 #announcer .call { font: 900 clamp(34px, 6.5vw, 76px)/1 Inter, Arial, sans-serif; letter-spacing: 0.04em; text-transform: uppercase;
   color: #fff; -webkit-text-stroke: 2px rgba(0,0,0,0.55); paint-order: stroke fill;

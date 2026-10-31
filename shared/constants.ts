@@ -177,6 +177,7 @@ export const DEF = {
   blasterStunSec: 2,
   bassStunSec: 1.1,
   bassNoise: 8,
+  stunGraceSec: 2.5, // after any stun wears off, defences leave that Opp alone this long (no stun-lock)
 };
 
 /** Playing as an Opp: abilities, plus the bot bros that fill bro slots so the 4:1 ratio holds. */

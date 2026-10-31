@@ -379,7 +379,7 @@ export class Hud {
     const ping = (r: ScoreRow) => (r.ai ? 'AI' : r.ping < 0 ? 'away' : `${r.ping}ms`);
     fill('score-bros', rows.filter((r) => r.role === 'bro'), [
       ['Name', (r) => `${r.n}${r.alive ? '' : ' (NPC)'}`], ['Score', (r) => r.score], ['Mogs', (r) => r.mogs],
-      ['Revives', (r) => r.revives], ['Let in', (r) => r.letIns], ["caught", (r) => r.caught], ['Ping', ping],
+      ['Revives', (r) => r.revives], ['Let in', (r) => r.letIns], ['Caught', (r) => r.caught], ['Ping', ping],
     ]);
     fill('score-six', rows.filter((r) => r.role === 'opp'), [
       ['Name', (r) => r.n], ['Score', (r) => r.score], ['Catches', (r) => r.catches], ['Ping', ping],
@@ -426,11 +426,14 @@ export class Hud {
     $('btn-role-six').classList.toggle('ghost', role !== 'opp');
   }
 
-  result(win: boolean, mvp?: string) {
+  /** `win` is the bros' result; an Opp player sees it from their side. */
+  result(win: boolean, mvp?: string, role: Role = 'bro') {
     const r = $('result');
+    const good = role === 'opp' ? !win : win;
     r.classList.remove('hidden', 'win', 'lose');
-    r.classList.add(win ? 'win' : 'lose');
-    $('result-title').textContent = win ? 'W. TOUCHED GRASS.' : 'L + RATIO';
+    r.classList.add(good ? 'win' : 'lose');
+    const title = role === 'opp' ? (good ? 'W. CAUGHT EM ALL.' : 'L. THEY TOUCHED GRASS.') : (good ? 'W. TOUCHED GRASS.' : 'L + RATIO');
+    $('result-title').textContent = title;
     $('result-sub').textContent = `${win ? 'The bros survived the night.' : 'The Opps got everyone.'}${mvp ? ` MVP: ${mvp}` : ''}`;
     setTimeout(() => r.classList.add('hidden'), 9000);
   }
