@@ -4,7 +4,7 @@ export const TICK_RATE = 20; // server simulation ticks per second
 export const SNAPSHOT_EVERY = 1; // send a snapshot every N ticks
 export const INTEREST_RADIUS = 30; // tiles: entities farther than this are not sent
 
-/** One Bill Collector for every this many bros (rounded up). */
+/** One Opp for every this many bros (rounded up). */
 export const BROS_PER_MONSTER = 4;
 
 export const PLOT = 14; // tiles per plot side (crib + street)
@@ -14,7 +14,7 @@ export const RADIUS = 0.35; // entity collision radius in tiles
 
 export const SPEED = {
   sneak: 2.0, // walk mode: slow and nearly silent
-  walk: 3.4, // normal: footsteps the Bill Collector can hear nearby
+  walk: 3.4, // normal: footsteps the Opp can hear nearby
   zoom: 5.4, // sprint: loud
   npc: 4.2, // ghost after being caught
   monsterAi: 3.5,
@@ -27,10 +27,10 @@ export const AURA = {
   max: 100,
   burnPerSec: 1.2, // ring light drain
   drop: 30, // aura gained from one aura drop
-  mogCost: 18, // aura spent when the ring light stuns a Bill Collector
+  mogCost: 18, // aura spent when the ring light stuns an Opp
 };
 
-export const RING_LIGHT_RANGE = 2.4; // tiles: a Bill Collector this close to a lit ring light gets mogged
+export const RING_LIGHT_RANGE = 2.4; // tiles: an Opp this close to a lit ring light gets mogged
 export const MOG_STUN_SEC = 2.6;
 export const CATCH_RANGE = 0.75;
 
@@ -62,7 +62,7 @@ export const REVIVE_SEC = 3;
 export const VISION = { lit: 8, dark: 4.5, monster: 3 };
 
 export const PHASE_SEC = {
-  pregame: 45, // scavenge before the Bill Collectors arrive
+  pregame: 45, // scavenge before the Opps arrive
   lockin: 420, // the night
   touchgrass: 12, // results screen, then a new night
 };
@@ -78,26 +78,23 @@ export const EVENTS = {
   gapMaxSec: 40,
   minSec: 10,
   maxSec: 20,
-  generatorWork: 4, // bro-seconds of repair to end a power cut early
-  generatorRange: 2.2,
   rageSpeed: 1.35,
   auraRainDrops: 14,
 };
 
 /** Aura rewards and penalties (shown as +/- popups). */
-export const AURA_DELTA = { revive: 20, letIn: 15, refuse: -10, generator: 25, mogBonus: 5 };
+export const AURA_DELTA = { revive: 20, letIn: 15, refuse: -10, mogBonus: 5 };
 
 /** Cash economy: earned during a match (kept between nights while you stay in the room). */
 export const CASH = {
   start: 50,
   drop: 25, // a cash pickup in the streets
-  perSecAlive: 0.5, // passive income during the night while not collected
+  perSecAlive: 0.5, // passive income during the night while not caught
   revive: 40,
   letIn: 25,
   mog: 15,
-  generator: 30,
   surviveNight: 100,
-  catch: 50, // player Bill Collectors
+  catch: 50, // player Opps
   smash: 20,
 };
 
@@ -109,10 +106,10 @@ export const DOOR_LEVEL_HP = [100, 160, 230, 320];
 export const SHOP: Record<ShopId, { name: string; price: number | number[]; desc: string }> = {
   armor: { name: 'Door armor', price: [120, 220, 350], desc: 'Both crib doors get more HP (3 levels).' },
   autorepair: { name: 'Auto-repair', price: 200, desc: 'Your doors slowly fix themselves.' },
-  trap: { name: 'Banana peel', price: 60, desc: 'Drop it (1). A Bill Collector that steps on it is stunned 3s.' },
+  trap: { name: 'Banana peel', price: 60, desc: 'Drop it (1). An Opp that steps on it is stunned 3s.' },
   drink: { name: 'Energy drink', price: 50, desc: 'Use it (2). 40% faster for 8s.' },
   decoy: { name: 'Decoy speaker', price: 70, desc: 'Drop it (3). Blasts noise for 7s to lure them away.' },
-  bribe: { name: 'Bribe', price: 150, desc: 'Use it (4). Bill Collectors ignore you for 8s.' },
+  bribe: { name: 'Bribe', price: 150, desc: 'Use it (4). Opps ignore you for 8s.' },
   aura: { name: 'Aura pack', price: 40, desc: '+40 aura right now.' },
 };
 
@@ -125,4 +122,38 @@ export const ITEM = {
   bribeSec: 8,
   autoRepairPerSec: 3,
   maxTrapsPerPlayer: 4,
+};
+
+/** Defences you build in your crib's plot. Each type has 3 levels (upgrades apply to all of that type you own). */
+export type DefKind = 'blaster' | 'lamp' | 'bass';
+export const DEF_KINDS: DefKind[] = ['blaster', 'lamp', 'bass'];
+
+export const DEFENCE: Record<DefKind, {
+  name: string; desc: string; build: number; upgrade: [number, number];
+  range: [number, number, number]; every: [number, number, number];
+}> = {
+  blaster: {
+    name: 'Rizz Blaster', desc: 'Turret. Fires foam at Opps; 5 hits stuns them.',
+    build: 150, upgrade: [150, 250], range: [5, 6, 7], every: [1.0, 0.7, 0.5],
+  },
+  lamp: {
+    name: 'Aura Lamp', desc: 'Fixed ring light. Mogs anything that gets close. Dead in power cuts.',
+    build: 120, upgrade: [120, 200], range: [2.4, 3, 3.6], every: [7, 5, 3.5],
+  },
+  bass: {
+    name: 'Bass Drop', desc: 'Speaker. Blasts Opps backwards. Loud: others hear it.',
+    build: 180, upgrade: [180, 280], range: [3, 3.5, 4], every: [6, 5, 4],
+  },
+};
+
+export const DEF = {
+  maxPerCrib: 6,
+  hp: 120,
+  repairPerSec: 30,
+  oppDamagePerSec: 20, // AI Opps wreck defences they brush past
+  playerSmash: 35,
+  blasterStunHits: 5,
+  blasterStunSec: 2,
+  bassStunSec: 1.1,
+  bassNoise: 8,
 };

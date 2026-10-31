@@ -6,7 +6,7 @@ import { Input, type Action } from './input.ts';
 import { chant, sfx } from './audio.ts';
 import { EVENTS, ITEM, JUMP, SPEED } from '../../shared/constants.ts';
 import {
-  cellAt, cribAtPos, dist, doorBlocks, doorCenter, GENERATOR_POS, move, overFence, type CribView, type DoorSide,
+  cellAt, cribAtPos, dist, doorBlocks, doorCenter, move, overFence, type CribView, type DoorSide,
 } from '../../shared/world.ts';
 import type { ClientMsg, EntView, LobbyInfo, Phase, Role, ServerMsg, WorldEvents } from '../../shared/protocol.ts';
 
@@ -40,9 +40,9 @@ class Game {
   phaseEnd = 0;
   night = 0;
   R = 1;
-  ev: WorldEvents = { power: true, powerFix: 0, fog: false, rage: false, lowgrav: false, disco: false, mode: null, modeEnd: 0 };
+  ev: WorldEvents = { power: true, fog: false, rage: false, lowgrav: false, disco: false, mode: null, modeEnd: 0 };
   lobby: LobbyInfo | null = null;
-  counts = { bros: 0, alive: 0, collectors: 0 };
+  counts = { bros: 0, alive: 0, opps: 0 };
   cribs = new Map<number, CribView>();
   snaps: Snap[] = [];
   me = { x: 0, y: 0, jumpT: 0, jumpCd: 0, init: false };
@@ -117,7 +117,7 @@ class Game {
       case 'scores': hud.scores(m.rows, this.selfId, this.lobby?.name ?? ''); break;
       case 'result':
         hud.result(m.win, m.mvp);
-        if ((m.win && this.role === 'bro') || (!m.win && this.role === 'collector')) sfx.win(); else sfx.lose();
+        if ((m.win && this.role === 'bro') || (!m.win && this.role === 'opp')) sfx.win(); else sfx.lose();
         break;
       case 'cash':
         if (m.d) hud.auraPop(m.d, m.why, true);
@@ -149,10 +149,11 @@ class Game {
     hud.wallet(m.you);
     this.drink = m.you.drink;
     renderer.setProps(m.props);
+    renderer.setDefs(m.defs);
     if (m.R !== this.R || !this.me.init) { this.R = m.R; renderer.buildWorld(m.R); }
     if (m.cribs) {
       this.cribs = new Map(m.cribs.map((c) => [c.i, c]));
-      renderer.updateCribs(m.cribs, this.myCrib);
+      renderer.updateCribs(m.cribs, this.myCrib, this.role === 'bro' && this.phase !== 'lockin');
     }
     if (m.drops) renderer.setDrops(m.drops);
     for (const n of m.noises) {
@@ -163,6 +164,7 @@ class Game {
       const vol = Math.max(0.15, 1 - d / 14);
       if (n.k === 'step' || n.k === 'zoom' || n.k === 'land') sfx.step(vol * (n.k === 'zoom' ? 1.6 : 1));
       else if (n.k === 'smash') sfx.knock();
+      else if (n.k === 'bass') sfx.bass();
     }
 
     const self = ents.get(this.selfId);
@@ -282,7 +284,7 @@ class Game {
       }
     }
     let sp: number;
-    if (this.role === 'collector') {
+    if (this.role === 'opp') {
       sp = this.phase === 'lockin' ? SPEED.monsterPlayer * (this.ev.rage ? EVENTS.rageSpeed : 1) * (this.ev.power ? 1 : 1.1) : SPEED.walk;
     } else sp = (this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : mv.sneak ? SPEED.sneak : SPEED.walk) * (this.drink > 0 && !this.npc ? ITEM.drinkSpeed : 1);
     if (mv.dx || mv.dy) {
@@ -303,11 +305,11 @@ class Game {
       }
     }
     const sideName = (s: DoorSide) => (s === 0 ? 'front' : 'back');
-    if (this.role === 'collector') {
+    if (this.role === 'opp') {
       if (best && doorBlocks(this.doors(best.plot, best.side))) return 'E: smash the door';
       return this.phase === 'lockin' ? 'Listen for noise ripples. Touch a bro to collect them.' : 'The night starts soon. Get ready.';
     }
-    if (!this.ev.power && dist(x, y, GENERATOR_POS[0], GENERATOR_POS[1]) < EVENTS.generatorRange) return `Hold R: fix the generator (${Math.round(this.ev.powerFix * 100)}%)`;
+    if (this.myCrib < 0 && this.phase !== 'lockin') return 'Walk into any free crib (no name on it) to make it yours';
     if (best) {
       const c = this.cribs.get(best.plot)!;
       const d = c.doors[best.side];
@@ -336,12 +338,12 @@ class Game {
       const js = this.ev.lowgrav ? JUMP.lowGravSec : JUMP.sec, jh = this.ev.lowgrav ? JUMP.lowGravHeight : JUMP.height;
       if (this.role === 'bro' && !this.npc) self.z = this.me.jumpT > 0 ? Math.max(0, Math.sin(Math.PI * (1 - this.me.jumpT / js))) * jh : 0;
     }
-    // the Bill Collector chant when one is close
+    // the Opp chant when one is close
     if (this.role === 'bro') {
       let nearest = Infinity;
       let near: EntView | null = null;
       for (const e of ents) {
-        if (e.k !== 'collector') continue;
+        if (e.k !== 'opp') continue;
         const d = dist(e.x, e.y, this.me.x, this.me.y);
         if (d < nearest) { nearest = d; near = e; }
       }
@@ -349,11 +351,11 @@ class Game {
         chant(nearest);
         if (nearest < 9 && now - this.lastPop > 700) {
           this.lastPop = now;
-          renderer.popText(near.x, near.y, ['PAY UP', '$$$', 'YOU OWE ME', 'OVERDUE'][Math.floor(now / 700) % 4], '#ffd23f');
+          renderer.popText(near.x, near.y, ['WE OUTSIDE', 'WHERE U AT', 'OPPS PACKIN', 'U LACKIN'][Math.floor(now / 700) % 4], '#ffd23f');
         }
       }
     }
-    renderer.frame(ents, this.selfId, this.me, this.ev, this.role === 'collector');
+    renderer.frame(ents, this.selfId, this.me, this.ev, this.role === 'opp');
     hud.timer(this.phase, this.phaseEnd, this.night, this.counts);
     hud.hint(this.hintText());
     hud.tickKnock();
@@ -397,7 +399,7 @@ function startGame(opts: JoinOpts) {
   game = new Game(opts);
 }
 
-const role = (): Role => ($<HTMLSelectElement>('role-select').value === 'collector' ? 'collector' : 'bro');
+const role = (): Role => ($<HTMLSelectElement>('role-select').value === 'opp' ? 'opp' : 'bro');
 
 async function refreshLobbies() {
   const ul = $('lobby-list');
@@ -574,9 +576,11 @@ $('btn-leave').onclick = () => { game?.leave(); showMenu(); };
 $('btn-shop').onclick = () => hud.toggleShop();
 $('shop-close').onclick = () => hud.toggleShop(false);
 hud.onBuy = (item) => game?.send({ t: 'buy', item });
+hud.onBuild = (kind) => { game?.send({ t: 'build', kind }); hud.toggleShop(false); };
+hud.onUpgrade = (kind) => game?.send({ t: 'upgrade', kind });
 $('btn-start').onclick = () => game?.send({ t: 'start' });
 $('btn-role-bro').onclick = () => game?.send({ t: 'role', role: 'bro' });
-$('btn-role-six').onclick = () => game?.send({ t: 'role', role: 'collector' });
+$('btn-role-six').onclick = () => game?.send({ t: 'role', role: 'opp' });
 $('btn-copy').onclick = async () => {
   const code = game?.lobby?.code;
   if (!code) return;

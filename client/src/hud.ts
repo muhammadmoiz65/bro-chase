@@ -2,7 +2,7 @@
 // Everything user-written is set with textContent, never innerHTML.
 
 import type { FeedItem, LobbyInfo, Phase, Role, ScoreRow, SelfView, WorldEvents } from '../../shared/protocol.ts';
-import { SHOP, type ShopId } from '../../shared/constants.ts';
+import { DEF, DEF_KINDS, DEFENCE, SHOP, type DefKind, type ShopId } from '../../shared/constants.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -29,13 +29,13 @@ export class Hud {
 
   show(on: boolean) { $('hud').classList.toggle('hidden', !on); }
 
-  timer(phase: Phase, phaseEnd: number, night: number, counts: { bros: number; alive: number; collectors: number }) {
+  timer(phase: Phase, phaseEnd: number, night: number, counts: { bros: number; alive: number; opps: number }) {
     const p = $('phase');
     p.textContent = phase === 'lockin' ? `LOCK IN · NIGHT ${night}` : PHASE_NAMES[phase];
     p.classList.toggle('lockin', phase === 'lockin');
     const left = phaseEnd ? Math.max(0, Math.ceil((phaseEnd - Date.now()) / 1000)) : 0;
     $('timer').textContent = phase === 'lobby' ? 'WAITING' : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-    $('counts').textContent = `Bros ${counts.alive}/${counts.bros} alive · Bill Collectors ${counts.collectors}`;
+    $('counts').textContent = `Bros ${counts.alive}/${counts.bros} alive · Opps ${counts.opps}`;
   }
 
   private lastMode: string | null = null;
@@ -44,9 +44,9 @@ export class Hud {
     const b = $('event-banner');
     const left = ev.modeEnd ? Math.max(0, Math.ceil((ev.modeEnd - Date.now()) / 1000)) : 0;
     const names: Record<string, string> = {
-      blackout: `POWER CUT · ${left}s · fix the generator in the plaza (${Math.round(ev.powerFix * 100)}%)`,
+      blackout: `POWER CUT · ${left}s · lamps are dead, stay quiet`,
       fog: `OHIO FOG · ${left}s`,
-      rage: `BILL COLLECTOR RAGE · ${left}s`,
+      rage: `OPP RAGE · ${left}s`,
       lowgrav: `LOW GRAVITY · ${left}s · jump!`,
       disco: `DISCO MODE · ${left}s · they hear less`,
     };
@@ -92,17 +92,33 @@ export class Hud {
     $('wallet').classList.toggle('hidden', !bro);
     $('items').classList.toggle('hidden', !bro);
     this.you = you;
-    if (this.shopOpen) this.renderShop();
+    if (this.shopOpen) this.refreshShop();
   }
 
   private you: SelfView | null = null;
   shopOpen = false;
   onBuy: (id: ShopId) => void = () => {};
+  onBuild: (k: DefKind) => void = () => {};
+  onUpgrade: (k: DefKind) => void = () => {};
 
   toggleShop(force?: boolean) {
     this.shopOpen = force ?? !this.shopOpen;
     $('shop').classList.toggle('hidden', !this.shopOpen);
-    if (this.shopOpen) this.renderShop();
+    this.shopKey = '';
+    if (this.shopOpen) this.refreshShop();
+  }
+
+  private shopKey = '';
+  /** Rebuild the shop only when what it lists changes; otherwise just enable/disable buttons for the cash you have.
+   *  (Re-creating the buttons every snapshot swallowed clicks.) */
+  private refreshShop() {
+    const you = this.you;
+    if (!you) return;
+    const key = JSON.stringify([you.inv, you.armor, you.autorepair, you.defLv, you.defCount, you.role]);
+    if (key !== this.shopKey) { this.shopKey = key; this.renderShop(); }
+    $('shop-list').querySelectorAll<HTMLButtonElement>('button[data-price]').forEach((b) => {
+      b.disabled = b.dataset.lock === '1' || you.cash < Number(b.dataset.price);
+    });
   }
 
   private renderShop() {
@@ -111,6 +127,27 @@ export class Hud {
     const list = $('shop-list');
     const rows: ShopId[] = ['armor', 'autorepair', 'trap', 'drink', 'decoy', 'bribe', 'aura'];
     list.replaceChildren();
+    list.appendChild(el('h3', 'shop-sec', `Defences (${you.defCount}/${DEF.maxPerCrib} built) · built where you stand, in or around your crib`));
+    for (const k of DEF_KINDS) {
+      const d = DEFENCE[k];
+      const lv = you.defLv[k];
+      const row = el('div', 'shop-row');
+      const info = el('div', 'info');
+      info.appendChild(el('b', '', `${d.name} (level ${lv}/3)`));
+      info.appendChild(el('span', '', d.desc));
+      const b1 = el('button', '', `Build $${d.build}`) as HTMLButtonElement;
+      b1.dataset.price = String(d.build);
+      b1.dataset.lock = you.defCount >= DEF.maxPerCrib || you.role !== 'bro' ? '1' : '0';
+      b1.onclick = () => this.onBuild(k);
+      const up = lv >= 3 ? null : d.upgrade[lv - 1];
+      const b2 = el('button', 'up', up === null ? 'MAX' : `Lv${lv + 1} $${up}`) as HTMLButtonElement;
+      b2.dataset.price = String(up ?? 0);
+      b2.dataset.lock = up === null ? '1' : '0';
+      b2.onclick = () => this.onUpgrade(k);
+      row.append(info, b1, b2);
+      list.appendChild(row);
+    }
+    list.appendChild(el('h3', 'shop-sec', 'Crib and items'));
     for (const id of rows) {
       const def = SHOP[id];
       let price: number | null;
@@ -126,7 +163,8 @@ export class Hud {
       info.appendChild(el('b', '', label));
       info.appendChild(el('span', '', def.desc));
       const btn = el('button', '', price === null ? 'OWNED' : `$${price}`) as HTMLButtonElement;
-      btn.disabled = price === null || you.cash < price || you.role !== 'bro';
+      btn.dataset.price = String(price ?? 0);
+      btn.dataset.lock = price === null || you.role !== 'bro' ? '1' : '0';
       btn.onclick = () => this.onBuy(id);
       row.append(info, btn);
       list.appendChild(row);
@@ -165,9 +203,9 @@ export class Hud {
 
   role(role: Role, npc: boolean) {
     const b = $('role-badge');
-    b.textContent = role === 'collector' ? 'YOU ARE A BILL COLLECTOR · hunt by sound' : npc ? 'NPC MODE · find a bro to revive you' : 'BRO';
-    b.style.color = role === 'collector' ? 'var(--pink)' : npc ? 'var(--muted)' : '#7cc7ff';
-    $('aura').classList.toggle('hidden', role === 'collector');
+    b.textContent = role === 'opp' ? 'YOU ARE A OPP · hunt by sound' : npc ? 'NPC MODE · find a bro to revive you' : 'BRO';
+    b.style.color = role === 'opp' ? 'var(--pink)' : npc ? 'var(--muted)' : '#7cc7ff';
+    $('aura').classList.toggle('hidden', role === 'opp');
   }
 
   aura(v: number, on: boolean) {
@@ -184,7 +222,7 @@ export class Hud {
       const row = el('div', 'feed-item');
       const add = (cls: string, text: string) => row.appendChild(el('span', cls, text));
       switch (it.k) {
-        case 'caught': add('six', it.a!); add('ico', 'COLLECTED'); add('bro', it.b!); break;
+        case 'caught': add('six', it.a!); add('ico', 'CAUGHT LACKIN'); add('bro', it.b!); break;
         case 'mog': add('bro', it.a!); add('ico', 'MOGGED'); add('six', it.b!); break;
         case 'revive': add('bro', it.a!); add('ico', 'REVIVED'); add('bro', it.b!); break;
         case 'letin': add('bro', it.a!); add('ico', 'LET IN'); add('bro', it.b!); break;
@@ -206,7 +244,7 @@ export class Hud {
     const log = $('chat-log');
     const line = el('div', `chat-line${sys ? ' sys' : ''}`);
     if (!sys) {
-      line.appendChild(el('span', `who${role === 'collector' ? ' six' : ''}`, `${from}: `));
+      line.appendChild(el('span', `who${role === 'opp' ? ' six' : ''}`, `${from}: `));
       line.appendChild(document.createTextNode(text));
     } else {
       line.textContent = text;
@@ -274,9 +312,9 @@ export class Hud {
     const ping = (r: ScoreRow) => (r.ai ? 'AI' : r.ping < 0 ? 'away' : `${r.ping}ms`);
     fill('score-bros', rows.filter((r) => r.role === 'bro'), [
       ['Name', (r) => `${r.n}${r.alive ? '' : ' (NPC)'}`], ['Score', (r) => r.score], ['Mogs', (r) => r.mogs],
-      ['Revives', (r) => r.revives], ['Let in', (r) => r.letIns], ["collected", (r) => r.caught], ['Ping', ping],
+      ['Revives', (r) => r.revives], ['Let in', (r) => r.letIns], ["caught", (r) => r.caught], ['Ping', ping],
     ]);
-    fill('score-six', rows.filter((r) => r.role === 'collector'), [
+    fill('score-six', rows.filter((r) => r.role === 'opp'), [
       ['Name', (r) => r.n], ['Score', (r) => r.score], ['Catches', (r) => r.catches], ['Ping', ping],
     ]);
   }
@@ -318,7 +356,7 @@ export class Hud {
       : `Waiting for ${info.hostName ?? 'the host'} to start the night.`;
     $('btn-start').classList.toggle('hidden', info.host !== myId);
     $('btn-role-bro').classList.toggle('ghost', role !== 'bro');
-    $('btn-role-six').classList.toggle('ghost', role !== 'collector');
+    $('btn-role-six').classList.toggle('ghost', role !== 'opp');
   }
 
   result(win: boolean, mvp?: string) {
@@ -326,7 +364,7 @@ export class Hud {
     r.classList.remove('hidden', 'win', 'lose');
     r.classList.add(win ? 'win' : 'lose');
     $('result-title').textContent = win ? 'W. TOUCHED GRASS.' : 'L + RATIO';
-    $('result-sub').textContent = `${win ? 'The bros survived the night.' : 'The Bill Collectors got everyone.'}${mvp ? ` MVP: ${mvp}` : ''}`;
+    $('result-sub').textContent = `${win ? 'The bros survived the night.' : 'The Opps got everyone.'}${mvp ? ` MVP: ${mvp}` : ''}`;
     setTimeout(() => r.classList.add('hidden'), 9000);
   }
 }

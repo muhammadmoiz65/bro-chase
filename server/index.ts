@@ -104,7 +104,7 @@ export function startServer(opts: StartOptions = {}): Promise<{ server: Server; 
     const acc = accounts.byToken(url.searchParams.get('token'));
     if (!acc) { ws.close(4001, 'not signed in'); return; }
     const mode = url.searchParams.get('mode') ?? 'quick';
-    const role: Role = url.searchParams.get('role') === 'collector' ? 'collector' : 'bro';
+    const role: Role = url.searchParams.get('role') === 'opp' ? 'opp' : 'bro';
     let room = rooms.quick;
     try {
       if (mode === 'create') {

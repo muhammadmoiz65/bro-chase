@@ -200,3 +200,6 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .shop-row .info span { color: var(--muted); font-size: 12px; }
 .shop-row button { min-width: 92px; background: #2fbf63; }
 .shop-row button:disabled { background: #333; color: #777; cursor: default; }
+
+.shop-sec { margin: 12px 0 2px; font-size: 13px; color: var(--gold); }
+.shop-row button.up { min-width: 80px; background: #6b3bff; }

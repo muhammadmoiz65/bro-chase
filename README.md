@@ -1,17 +1,17 @@
 # Bro Chase
 
-Survive the night. Don't get collected.
+Survive the night. Don't get caught.
 
 A brain-rot themed, online co-op survival horror game in the browser (2.5D, Three.js). Every bro gets a
-crib with a front and a back door, locked by default. Bill Collectors are blind and hunt by sound. When one
+crib with a front and a back door, locked by default. Opps are blind and hunt by sound. When one
 smashes in, run out the other door to a friend's crib and knock: they decide whether to let you in.
 
 ## Features
 
 - No player cap: the neighbourhood grows a crib for every bro who joins
-- One Bill Collector per 4 bros (rounded up); AI fills slots, players can take one while the 4:1 ratio holds
-- Ring light (mogs a Bill Collector that gets close, burns aura), jumping yard fences, noise ripples
-- Night events: power failure (fix the generator), aura rain, Ohio fog, Bill Collector rage
+- One Opp per 4 bros (rounded up); AI fills slots, players can take one while the 4:1 ratio holds
+- Ring light (mogs an Opp that gets close, burns aura), jumping yard fences, noise ripples
+- Night events: power failure (fix the generator), aura rain, Ohio fog, Opp rage
 - NPC mode when caught; a living bro next to you for 3 seconds revives you
 - Counter-Strike style kill feed, Tab scoreboard, in-game chat
 - Quick play, public lobbies, and private lobbies with invite codes / links; the host starts the night

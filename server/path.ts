@@ -1,5 +1,5 @@
-// Grid A* for AI Bill Collectors. Walls, fences, pillars and lamps block. A shut, intact
-// door is passable at a high cost: the Bill Collector will stop and smash it.
+// Grid A* for AI Opps. Walls, fences, pillars and lamps block. A shut, intact
+// door is passable at a high cost: the Opp will stop and smash it.
 
 import { cellAt, doorBlocks, type DoorLookup } from '../shared/world.ts';
 

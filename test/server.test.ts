@@ -4,7 +4,7 @@ import { WebSocket } from 'ws';
 import { Room } from '../server/game.ts';
 import { startServer } from '../server/index.ts';
 import { solvePow } from '../server/captcha.ts';
-import { doorCenter } from '../shared/world.ts';
+import { doorCenter, plotCenter } from '../shared/world.ts';
 import type { ServerMsg } from '../shared/protocol.ts';
 
 // ---------- room-level tests with fake sockets ----------
@@ -29,13 +29,23 @@ const tick = (r: Room, n = 1) => { for (let i = 0; i < n; i++) (r as any).tick()
 /** Host starts and we skip straight past pregame into the night. */
 const lockIn = (r: Room, hostId: string) => { r.handle(hostId, { t: 'start' }); r.phaseEnd = 0; tick(r); };
 
-function joinN(r: Room, n: number, role: 'bro' | 'collector' = 'bro') {
+/** Walk a bro into the first free crib so they claim it. */
+function settle(r: Room, id: string) {
+  const p = r.players.get(id)!;
+  let i = 1;
+  while (r.cribs.get(i)?.owner) i++;
+  [p.x, p.y] = plotCenter(i);
+  tick(r);
+}
+
+function joinN(r: Room, n: number, role: 'bro' | 'opp' = 'bro', home = true) {
   const out: Array<{ id: string; ws: FakeWs }> = [];
   for (let i = 0; i < n; i++) {
     const ws = new FakeWs();
     const id = `p${r.players.size + 1}`;
     r.join(id, `Bro${id}`, ws as any, role);
     out.push({ id, ws });
+    if (home && r.players.get(id)!.role === 'bro') settle(r, id);
   }
   return out;
 }
@@ -50,7 +60,7 @@ test('first player in a custom lobby is the host, and only the host can start', 
   assert.equal(r.phase, 'pregame');
 });
 
-test('one Bill Collector per 4 bros (rounded up), AI fills the slots', () => {
+test('one Opp per 4 bros (rounded up), AI fills the slots', () => {
   const r = makeRoom();
   joinN(r, 9);
   lockIn(r, 'p1');
@@ -58,24 +68,37 @@ test('one Bill Collector per 4 bros (rounded up), AI fills the slots', () => {
   assert.equal(r.ais.length, 3); // ceil(9 / 4)
 });
 
-test('a player can only be a Bill Collector while the 4:1 ratio holds', () => {
+test('a player can only be an Opp while the 4:1 ratio holds', () => {
   const r = makeRoom();
-  const [solo] = joinN(r, 1, 'collector');
+  const [solo] = joinN(r, 1, 'opp');
   assert.equal(r.players.get(solo.id)!.role, 'bro');
   assert.match(solo.ws.last('welcome')!.notice!, /4 bros/);
   joinN(r, 3);
-  const [monster] = joinN(r, 1, 'collector');
-  assert.equal(r.players.get(monster.id)!.role, 'collector');
+  const [monster] = joinN(r, 1, 'opp');
+  assert.equal(r.players.get(monster.id)!.role, 'opp');
   lockIn(r, 'p1');
-  assert.equal(r.ais.length, 0); // 4 bros -> 1 Bill Collector, already a player
+  assert.equal(r.ais.length, 0); // 4 bros -> 1 Opp, already a player
 });
 
-test('every bro gets a crib, doors start locked, and the map grows with players', () => {
+test('bros spawn homeless, claim a free crib by walking in, and lock-in houses everyone else', () => {
   const r = makeRoom();
-  joinN(r, 12);
-  assert.equal(r.cribs.size, 12);
-  for (const c of r.cribs.values()) for (const d of c.doors) { assert.equal(d.open, false); assert.equal(d.hp, 100); }
-  assert.equal(r.R, 2); // 13 plots need ring 2
+  const [a, b, c] = joinN(r, 3, 'bro', false);
+  assert.equal(r.cribs.size, 0);
+  assert.ok((2 * r.R + 1) ** 2 - 1 >= 3 + 3, 'map keeps spare cribs');
+  settle(r, a.id);
+  const pa = r.players.get(a.id)!;
+  assert.ok(pa.crib > 0);
+  for (const d of r.cribs.get(pa.crib)!.doors) { assert.equal(d.open, false); assert.equal(d.hp, 100); }
+  // b walks into a's crib: already taken, nothing happens
+  const pb = r.players.get(b.id)!;
+  [pb.x, pb.y] = plotCenter(pa.crib);
+  tick(r);
+  assert.equal(pb.crib, -1);
+  lockIn(r, a.id);
+  assert.ok(pb.crib > 0 && r.players.get(c.id)!.crib > 0, 'lock-in gives the homeless a crib');
+  assert.equal(new Set([pa.crib, pb.crib, r.players.get(c.id)!.crib]).size, 3);
+  joinN(r, 12, 'bro', false);
+  assert.ok((2 * r.R + 1) ** 2 - 1 >= 15 + 3, 'the map grows with players');
 });
 
 test('knocking asks the owner; the door opens only on approval', () => {
@@ -131,7 +154,7 @@ test('owners open their own door without asking', () => {
   assert.equal(r.cribs.get(pa.crib)!.doors[0].open, true);
 });
 
-test('a Bill Collector catches a bro, a lit ring light mogs it, a revive brings the bro back', () => {
+test('an Opp catches a bro, a lit ring light mogs it, a revive brings the bro back', () => {
   const r = makeRoom();
   const [a, b] = joinN(r, 2);
   lockIn(r, a.id);
@@ -151,7 +174,7 @@ test('a Bill Collector catches a bro, a lit ring light mogs it, a revive brings 
   assert.equal(pa.npc, false, 'revived');
   assert.equal(pb.stats.revives, 1);
 
-  // mog: B's ring light stuns a Bill Collector that gets close
+  // mog: B's ring light stuns an Opp that gets close
   ai.stunUntil = 0;
   pb.light = true;
   ai.x = pb.x + 1.5; ai.y = pb.y;
@@ -173,18 +196,16 @@ test('a mid-air bro cannot be caught', () => {
   assert.equal(pa.npc, false);
 });
 
-test('power failure is fixed by repairing the generator', () => {
+test('a power cut ends by itself', () => {
   const r = makeRoom();
   const [a] = joinN(r, 1);
   lockIn(r, a.id);
   r.ev.power = false;
   r.ev.mode = 'blackout';
-  r.ev.modeEnd = Infinity;
-  const pa = r.players.get(a.id)!;
-  pa.x = 1.5; pa.y = 1.6; // next to the generator in the plaza
-  r.handle(a.id, { t: 'repair', on: true });
-  tick(r, 4 * 20 + 2);
+  r.ev.modeEnd = 0;
+  tick(r);
   assert.equal(r.ev.power, true);
+  assert.equal(r.ev.mode, null);
 });
 
 test('chat is broadcast, trimmed and rate limited', () => {
@@ -196,7 +217,7 @@ test('chat is broadcast, trimmed and rate limited', () => {
   assert.match(a.ws.last('chat')!.text, /Slow down/);
 });
 
-test('scoreboard lists players and AI Bill Collectors', () => {
+test('scoreboard lists players and AI Opps', () => {
   const r = makeRoom();
   const [a] = joinN(r, 3);
   lockIn(r, a.id);
@@ -260,4 +281,25 @@ test('guest account, password, login on a new device, and joining over WebSocket
   } finally {
     srv.close();
   }
+});
+
+test('bros build defences in their crib; a Rizz Blaster stuns an Opp after 5 hits', () => {
+  const r = makeRoom();
+  const [a] = joinN(r, 1);
+  const pa = r.players.get(a.id)!;
+  pa.cash = 1000;
+  r.handle(a.id, { t: 'build', kind: 'blaster' });
+  assert.equal(r.defs.length, 1);
+  pa.x += 30; // far from home
+  r.handle(a.id, { t: 'build', kind: 'lamp' });
+  assert.equal(r.defs.length, 1, 'cannot build outside your plot');
+  r.handle(a.id, { t: 'upgrade', kind: 'blaster' });
+  assert.equal(r.cribs.get(pa.crib)!.defLv.blaster, 2);
+  lockIn(r, a.id);
+  const ai = r.ais[0];
+  const d = r.defs[0];
+  ai.x = d.x + 3; ai.y = d.y; ai.stunUntil = 0; ai.path = [];
+  ai.replanAt = Infinity;
+  for (let i = 0; i < 20 * 6 && ai.stunUntil < Date.now() / 1000; i++) { ai.x = d.x + 3; ai.y = d.y; tick(r); }
+  assert.ok(ai.stunUntil > Date.now() / 1000, 'stunned by the blaster');
 });

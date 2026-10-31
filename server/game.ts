@@ -1,17 +1,17 @@
 // One game room: a shared, growing neighbourhood of cribs, its bros, and the
-// Bill Collectors hunting them. The server is the only source of truth; clients send
+// Opps hunting them. The server is the only source of truth; clients send
 // inputs and receive filtered snapshots.
 
 import type { WebSocket } from 'ws';
 import {
-  AURA, AURA_DELTA, BROS_PER_MONSTER, CASH, DOOR_LEVEL_HP, ITEM, SHOP, type ItemId, type ShopId, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
+  AURA, AURA_DELTA, BROS_PER_MONSTER, CASH, DEF, DEF_KINDS, DEFENCE, DOOR_LEVEL_HP, ITEM, SHOP, type DefKind, type ItemId, type ShopId, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
   PHASE_SEC, PLOT, RECONNECT_GRACE_SEC, REVIVE_RANGE, REVIVE_SEC, RING_LIGHT_RANGE, SPEED, TICK_RATE, VISION,
 } from '../shared/constants.ts';
 import type {
-  ClientMsg, DropView, EntView, FeedItem, LobbyInfo, ModeName, NoiseKind, NoiseView, Phase, PropView, Role, ScoreRow, SelfView, ServerMsg,
+  ClientMsg, DropView, EntView, FeedItem, LobbyInfo, ModeName, NoiseKind, NoiseView, Phase, PropView, DefView, Role, ScoreRow, SelfView, ServerMsg,
 } from '../shared/protocol.ts';
 import {
-  cellAt, cribSpawn, dist, doorBlocks, doorCells, doorCenter, GENERATOR_POS, move, overFence, plotCenter,
+  cellAt, cribAtPos, cribSpawn, dist, doorBlocks, doorCells, doorCenter, move, overFence, plotCenter,
   ringFor, type CribView, type DoorSide, type DoorState,
 } from '../shared/world.ts';
 import { findPath } from './path.ts';
@@ -24,7 +24,11 @@ export interface Hooks {
 }
 
 interface Door extends DoorState { openUntil: number }
-interface Crib { owner: string | null; ownerName?: string; doors: [Door, Door]; level: number; autorepair: boolean }
+interface Crib { owner: string | null; ownerName?: string; doors: [Door, Door]; level: number; autorepair: boolean; defLv: Record<DefKind, number> }
+
+interface Def { id: number; k: DefKind; x: number; y: number; hp: number; owner: string; plot: number; cd: number; shotT: number; tx: number; ty: number }
+
+interface Hunter { id: string; x: number; y: number; name: string; stunUntil: number; stunFrom: [number, number]; stats: RoundStats; blasterHits?: number }
 
 interface RoundStats { score: number; catches: number; mogs: number; revives: number; letIns: number; caught: number }
 const freshStats = (): RoundStats => ({ score: 0, catches: 0, mogs: 0, revives: 0, letIns: 0, caught: 0 });
@@ -69,6 +73,7 @@ interface Ai {
   smashNoiseT: number;
   hunchAt: number;
   stats: RoundStats;
+  blasterHits?: number;
 }
 
 interface Noise { id: number; x: number; y: number; r: number; t: number; src: string | null; k: NoiseKind }
@@ -96,10 +101,11 @@ export class Room {
   night = 0;
   noises: Noise[] = [];
   drops: Array<{ id: number; x: number; y: number; k: 'aura' | 'cash' }> = [];
+  defs: Def[] = [];
   props: Array<{ id: number; k: 'trap' | 'decoy'; x: number; y: number; owner: string; until: number; noiseT: number }> = [];
   knocks = new Map<number, Knock>();
   feed: FeedItem[] = [];
-  ev = { power: true, powerWork: 0, mode: null as ModeName | null, modeEnd: 0, nextAt: 0 };
+  ev = { power: true, mode: null as ModeName | null, modeEnd: 0, nextAt: 0 };
   private tickN = 0;
   private timer: NodeJS.Timeout | null = null;
   private dropT = 0;
@@ -133,12 +139,12 @@ export class Room {
   // ---------- membership ----------
 
   get bros() { return [...this.players.values()].filter((p) => p.role === 'bro'); }
-  get collectorPlayers() { return [...this.players.values()].filter((p) => p.role === 'collector'); }
+  get oppPlayers() { return [...this.players.values()].filter((p) => p.role === 'opp'); }
   get connectedCount() { return [...this.players.values()].filter((p) => p.ws).length; }
 
-  private canBeCollector(excludeId?: string): boolean {
+  private canBeOpp(excludeId?: string): boolean {
     const bros = this.bros.filter((p) => p.id !== excludeId).length;
-    const six = this.collectorPlayers.filter((p) => p.id !== excludeId).length;
+    const six = this.oppPlayers.filter((p) => p.id !== excludeId).length;
     return (six + 1) * BROS_PER_MONSTER <= bros;
   }
 
@@ -156,9 +162,9 @@ export class Room {
       p.name = name;
     } else {
       let role: Role = 'bro';
-      if (wantRole === 'collector') {
-        if (this.canBeCollector()) role = 'collector';
-        else notice = `Bill Collector slots need ${BROS_PER_MONSTER} bros each. You're a bro for now; the AI plays the Bill Collector.`;
+      if (wantRole === 'opp') {
+        if (this.canBeOpp()) role = 'opp';
+        else notice = `Opp slots need ${BROS_PER_MONSTER} bros each. You're a bro for now; the AI plays the Opp.`;
       }
       p = {
         id: accountId, name, role, ws, leftAt: 0, x: 0, y: 0, npc: false, light: false, aura: AURA.start,
@@ -168,10 +174,12 @@ export class Room {
         repairNoiseT: 0, smashCd: 0, chatTimes: [],
       };
       this.players.set(accountId, p);
-      if (role === 'bro') this.giveCrib(p);
+      this.ensureRoom();
+      // mid-night joiners get the nearest free crib; otherwise walk into any free crib to claim it
+      if (role === 'bro' && this.phase === 'lockin') this.claimCrib(p, this.nearestFreeCrib(0, 0));
       this.spawn(p);
       this.feed.push({ k: 'join', a: name });
-      this.systemChat(`${name} joined${role === 'collector' ? ' as a Bill Collector' : ''}.`);
+      this.systemChat(`${name} joined${role === 'opp' ? ' as an Opp' : ''}.`);
       if (!this.hostId && !this.quick) this.hostId = accountId;
     }
     this.emptySince = 0;
@@ -201,23 +209,71 @@ export class Room {
     }
   }
 
-  private giveCrib(p: Player) {
-    let i = 1;
-    while (this.cribs.get(i)?.owner) i++;
+  /** Keep enough plots so there are always a few free cribs to pick from. */
+  private ensureRoom() {
+    const bros = [...this.players.values()].filter((q) => q.role === 'bro').length;
+    this.R = Math.max(this.R, ringFor(bros + 4), ...[...this.cribs.keys()].map((i) => ringFor(i + 1)));
+  }
+
+  private maxPlot() { return (2 * this.R + 1) ** 2 - 1; }
+
+  private nearestFreeCrib(x: number, y: number): number {
+    let best = -1, bd = Infinity;
+    for (let i = 1; i <= this.maxPlot(); i++) {
+      if (this.cribs.get(i)?.owner) continue;
+      const [cx, cy] = plotCenter(i);
+      const d = dist(cx, cy, x, y);
+      if (d < bd) { bd = d; best = i; }
+    }
+    if (best < 0) { this.R++; return this.nearestFreeCrib(x, y); }
+    return best;
+  }
+
+  private claimCrib(p: Player, i: number) {
+    if (p.crib >= 0) this.releaseCrib(p);
     const fresh = (): Door => ({ hp: DOOR.maxHp, open: false, openUntil: 0 });
-    this.cribs.set(i, { owner: p.id, ownerName: p.name, doors: [fresh(), fresh()], level: 0, autorepair: false });
+    this.cribs.set(i, { owner: p.id, ownerName: p.name, doors: [fresh(), fresh()], level: 0, autorepair: false, defLv: { blaster: 1, lamp: 1, bass: 1 } });
     p.crib = i;
-    this.R = Math.max(this.R, ringFor(i + 1));
+    this.ensureRoom();
+  }
+
+  /** Lobby and pregame: a bro without a crib who walks into a free one settles there. */
+  private stepClaims() {
+    if (this.phase !== 'lobby' && this.phase !== 'pregame') return;
+    for (const p of this.players.values()) {
+      if (p.role !== 'bro' || p.npc) continue;
+      const i = cribAtPos(p.x, p.y, this.R);
+      if (i <= 0 || i === p.crib || this.cribs.get(i)?.owner) continue;
+      // you can move house until you have spent anything on your crib
+      const old = p.crib >= 0 ? this.cribs.get(p.crib) : undefined;
+      if (old && (old.level > 0 || old.autorepair || this.defs.some((d) => d.plot === p.crib))) continue;
+      this.claimCrib(p, i);
+      this.sys(p, old ? 'Moved into this crib. Doors lock behind you.' : 'This crib is yours now. Doors are locked: only you can open them.');
+      this.feed.push({ k: 'info', text: `${p.name} settled in a crib.` });
+    }
+  }
+
+  /** Lock-in: anyone still homeless gets the nearest free crib. */
+  private assignHomeless() {
+    for (const p of this.players.values()) {
+      if (p.role !== 'bro' || p.crib >= 0) continue;
+      this.claimCrib(p, this.nearestFreeCrib(p.x, p.y));
+      this.sys(p, 'You never picked a crib, so you got the nearest one. Get inside!');
+    }
   }
 
   private releaseCrib(p: Player) {
     const c = this.cribs.get(p.crib);
     if (c && c.owner === p.id) this.cribs.delete(p.crib);
+    this.defs = this.defs.filter((d) => d.owner !== p.id);
     p.crib = -1;
   }
 
   private spawn(p: Player) {
-    if (p.role === 'bro') {
+    if (p.role === 'bro' && p.crib < 0) {
+      p.x = (Math.random() - 0.5) * 4;
+      p.y = (Math.random() - 0.5) * 4;
+    } else if (p.role === 'bro') {
       const [x, y] = cribSpawn(p.crib);
       p.x = x + (Math.random() - 0.5);
       p.y = y + (Math.random() - 0.5);
@@ -279,6 +335,8 @@ export class Room {
       case 'use': this.use(p); break;
       case 'buy': this.buy(p, msg.item); break;
       case 'item': this.useItem(p, msg.item); break;
+      case 'build': this.build(p, msg.kind); break;
+      case 'upgrade': this.upgradeDef(p, msg.kind); break;
       case 'repair': p.repairing = !!msg.on; break;
       case 'answer': this.answer(p, Number(msg.id), !!msg.ok); break;
       case 'chat': this.chat(p, msg.text); break;
@@ -294,28 +352,42 @@ export class Room {
   }
 
   private switchRole(p: Player, role: Role) {
-    if (role !== 'bro' && role !== 'collector') return;
+    if (role !== 'bro' && role !== 'opp') return;
     if (p.role === role) return;
     if (this.phase === 'lockin') {
       this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', text: 'You can switch roles between nights.', sys: true });
       return;
     }
-    if (role === 'collector' && !this.canBeCollector(p.id)) {
+    if (role === 'opp' && !this.canBeOpp(p.id)) {
       this.sendTo(p, {
         t: 'chat', from: 'server', role: 'bro', sys: true,
-        text: `Not enough bros: each Bill Collector needs ${BROS_PER_MONSTER} bros.`,
+        text: `Not enough bros: each Opp needs ${BROS_PER_MONSTER} bros.`,
       });
       return;
     }
     p.role = role;
-    if (role === 'collector') this.releaseCrib(p);
-    else this.giveCrib(p);
+    if (role === 'opp') this.releaseCrib(p);
+    this.ensureRoom();
     this.spawn(p);
-    this.systemChat(`${p.name} is now ${role === 'bro' ? 'a bro' : 'a Bill Collector'}.`);
+    this.systemChat(`${p.name} is now ${role === 'bro' ? 'a bro' : 'an Opp'}.`);
   }
 
   private use(p: Player) {
     if (p.npc) return;
+    if (p.role === 'opp' && p.smashCd <= 0 && now() >= p.stunUntil) {
+      const d = this.defs.find((x) => dist(x.x, x.y, p.x, p.y) < 1.6);
+      if (d) {
+        p.smashCd = DOOR.playerSmashCooldown;
+        d.hp -= DEF.playerSmash;
+        this.noise(d.x, d.y, NOISE.smash, p.id, 'smash');
+        if (d.hp <= 0) {
+          this.defs.splice(this.defs.indexOf(d), 1);
+          p.stats.score += 5;
+          this.feed.push({ k: 'smash', a: p.name, b: DEFENCE[d.k].name });
+        }
+        return;
+      }
+    }
     // find the closest door within reach
     let best: { plot: number; side: DoorSide; d: number } | null = null;
     for (const [plot, c] of this.cribs) {
@@ -330,7 +402,7 @@ export class Room {
     const crib = this.cribs.get(best.plot)!;
     const door = crib.doors[best.side];
     const [dx, dy] = doorCenter(best.plot, best.side);
-    if (p.role === 'collector') {
+    if (p.role === 'opp') {
       if (p.smashCd > 0 || !doorBlocks(door) || now() < p.stunUntil) return;
       p.smashCd = DOOR.playerSmashCooldown;
       this.hitDoor(best.plot, best.side, DOOR.playerSmash, p.name, p.stats);
@@ -450,14 +522,99 @@ export class Room {
     } else if (item === 'drink') p.drinkUntil = t + ITEM.drinkSec;
     else if (item === 'bribe') {
       p.bribeUntil = t + ITEM.bribeSec;
-      this.feed.push({ k: 'info', text: `${p.name} paid off the Bill Collectors (for now).` });
+      this.feed.push({ k: 'info', text: `${p.name} paid off the Opps (for now).` });
     }
     p.inv[item]--;
   }
 
+  private sys(p: Player, text: string) {
+    this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', sys: true, text });
+  }
+
+  private build(p: Player, kind: DefKind) {
+    const def = DEFENCE[kind];
+    if (!def || p.role !== 'bro' || p.npc || p.crib < 0) return;
+    const [cx, cy] = plotCenter(p.crib);
+    if (Math.abs(p.x - cx) > PLOT / 2 - 0.6 || Math.abs(p.y - cy) > PLOT / 2 - 0.6) return this.sys(p, 'Build defences in or around your own crib.');
+    const cell = cellAt(Math.floor(p.x), Math.floor(p.y), this.R);
+    if (cell.kind !== 'floor' && cell.kind !== 'street') return this.sys(p, "Can't build on a door.");
+    if (this.defs.filter((d) => d.plot === p.crib).length >= DEF.maxPerCrib) return this.sys(p, `Max ${DEF.maxPerCrib} defences per crib.`);
+    if (this.defs.some((d) => dist(d.x, d.y, p.x, p.y) < 0.9)) return this.sys(p, 'Too close to another defence.');
+    if (p.cash < def.build) return this.sys(p, `Not enough cash: ${def.name} costs $${def.build}.`);
+    this.cashDelta(p, -def.build, `built ${def.name}`);
+    this.defs.push({ id: dropSeq++, k: kind, x: p.x, y: p.y, hp: DEF.hp, owner: p.id, plot: p.crib, cd: 0, shotT: 0, tx: 0, ty: 0 });
+  }
+
+  private upgradeDef(p: Player, kind: DefKind) {
+    const crib = p.crib >= 0 ? this.cribs.get(p.crib) : undefined;
+    const def = DEFENCE[kind];
+    if (!crib || !def) return;
+    const lv = crib.defLv[kind];
+    if (lv >= 3) return this.sys(p, `${def.name} is already max level.`);
+    const price = def.upgrade[lv - 1];
+    if (p.cash < price) return this.sys(p, `Not enough cash: upgrade costs $${price}.`);
+    this.cashDelta(p, -price, `${def.name} level ${lv + 1}`);
+    crib.defLv[kind] = lv + 1;
+    for (const d of this.defs) if (d.owner === p.id && d.k === kind) d.hp = DEF.hp;
+  }
+
+  private hunters(): Hunter[] {
+    return [...this.ais, ...this.oppPlayers] as Hunter[];
+  }
+
+  private stepDefs(t: number) {
+    if (this.phase !== 'lockin') return;
+    const hunters = this.hunters();
+    for (const d of [...this.defs]) {
+      d.cd = Math.max(0, d.cd - DT);
+      const lv = this.cribs.get(d.plot)?.defLv[d.k] ?? 1;
+      const range = DEFENCE[d.k].range[lv - 1];
+      const owner = this.players.get(d.owner);
+      // Opps wreck defences they brush past
+      for (const h of hunters) {
+        if (t < h.stunUntil || !h.id.startsWith('ai-')) continue;
+        if (dist(h.x, h.y, d.x, d.y) < 1.1) d.hp -= DEF.oppDamagePerSec * DT;
+      }
+      if (d.hp <= 0) {
+        this.defs.splice(this.defs.indexOf(d), 1);
+        this.feed.push({ k: 'info', text: `An Opp wrecked ${owner?.name ?? 'a'}'s ${DEFENCE[d.k].name}` });
+        continue;
+      }
+      if (d.cd > 0) continue;
+      const targets = hunters.filter((h) => t >= h.stunUntil && dist(h.x, h.y, d.x, d.y) < range);
+      if (!targets.length) continue;
+      const h = targets.sort((a, b) => dist(a.x, a.y, d.x, d.y) - dist(b.x, b.y, d.x, d.y))[0];
+      if (d.k === 'blaster') {
+        d.cd = DEFENCE.blaster.every[lv - 1];
+        d.shotT = t; d.tx = h.x; d.ty = h.y;
+        h.blasterHits = (h.blasterHits ?? 0) + 1;
+        if (h.blasterHits >= DEF.blasterStunHits) {
+          h.blasterHits = 0;
+          h.stunUntil = t + DEF.blasterStunSec;
+          h.stunFrom = [d.x, d.y];
+          if (owner) { owner.stats.score += 5; this.cashDelta(owner, 10, 'Rizz Blaster stun'); }
+          this.feed.push({ k: 'info', text: `${owner?.name ?? 'A'}'s Rizz Blaster foamed ${h.name}` });
+        }
+      } else if (d.k === 'lamp') {
+        if (!this.ev.power) continue; // no power, no light
+        d.cd = DEFENCE.lamp.every[lv - 1];
+        d.shotT = t; d.tx = h.x; d.ty = h.y;
+        h.stunUntil = t + MOG_STUN_SEC;
+        h.stunFrom = [d.x, d.y];
+        if (owner) { owner.stats.mogs++; owner.stats.score += 8; this.cashDelta(owner, 10, 'Aura Lamp mog'); }
+        this.feed.push({ k: 'mog', a: `${owner?.name ?? 'An'}'s Aura Lamp`, b: h.name });
+      } else if (d.k === 'bass') {
+        d.cd = DEFENCE.bass.every[lv - 1];
+        d.shotT = t; d.tx = d.x; d.ty = d.y;
+        for (const x of targets) { x.stunUntil = t + DEF.bassStunSec; x.stunFrom = [d.x, d.y]; }
+        this.noise(d.x, d.y, DEF.bassNoise, null, 'bass');
+      }
+    }
+  }
+
   private stepProps(t: number) {
     this.props = this.props.filter((pr) => t < pr.until);
-    const hunters: Array<{ x: number; y: number; name: string; stunUntil: number; stunFrom: [number, number] }> = [...this.ais, ...this.collectorPlayers];
+    const hunters: Array<{ x: number; y: number; name: string; stunUntil: number; stunFrom: [number, number] }> = [...this.ais, ...this.oppPlayers];
     for (const pr of [...this.props]) {
       if (pr.k === 'decoy') {
         if ((pr.noiseT -= DT) <= 0) { pr.noiseT = 0.8; this.noise(pr.x, pr.y, ITEM.decoyNoise, null, 'decoy'); }
@@ -493,7 +650,7 @@ export class Room {
     if (d.hp === 0) {
       d.open = false;
       stats.score += 5;
-      const smasher = [...this.players.values()].find((q) => q.name === by && q.role === 'collector');
+      const smasher = [...this.players.values()].find((q) => q.name === by && q.role === 'opp');
       if (smasher) this.cashDelta(smasher, CASH.smash, 'smashed a door');
       this.feed.push({ k: 'smash', a: by, b: `${c.ownerName}'s ${side === 0 ? 'front' : 'back'} door` });
     }
@@ -505,14 +662,15 @@ export class Room {
     if (phase === 'pregame') {
       this.reset();
       this.phaseEnd = t + this.phaseSec.pregame;
-      this.systemChat('Pregame: grab aura drops and get to your crib. The Bill Collectors come out soon.');
+      this.systemChat('Pregame: walk into any free crib to make it yours, then grab cash. The Opps come out soon.');
     } else if (phase === 'lockin') {
       this.night++;
+      this.assignHomeless();
       this.phaseEnd = t + this.phaseSec.lockin;
       this.ev.nextAt = t + EVENTS.firstAfterSec;
-      for (const p of this.collectorPlayers) [p.x, p.y] = this.edgeSpawn();
+      for (const p of this.oppPlayers) [p.x, p.y] = this.edgeSpawn();
       this.adjustAis(true);
-      this.feed.push({ k: 'info', text: 'LOCK IN. The Bill Collectors are out.' });
+      this.feed.push({ k: 'info', text: 'LOCK IN. The Opps are out.' });
     } else if (phase === 'touchgrass') {
       this.phaseEnd = t + this.phaseSec.touchgrass;
     } else {
@@ -525,16 +683,17 @@ export class Room {
     this.ais = [];
     this.knocks.clear();
     this.noises = [];
-    this.ev = { power: true, powerWork: 0, mode: null, modeEnd: 0, nextAt: 0 };
-    // enforce the 4:1 ratio for player Bill Collectors between nights
-    for (const p of this.collectorPlayers) {
-      if (!this.canBeCollector(p.id)) {
+    this.ev = { power: true, mode: null, modeEnd: 0, nextAt: 0 };
+    // enforce the 4:1 ratio for player Opps between nights
+    for (const p of this.oppPlayers) {
+      if (!this.canBeOpp(p.id)) {
         p.role = 'bro';
-        this.giveCrib(p);
-        this.systemChat(`${p.name} is back to being a bro (not enough bros for another Bill Collector).`);
+        this.ensureRoom();
+        this.systemChat(`${p.name} is back to being a bro (not enough bros for another Opp).`);
       }
     }
     this.props = [];
+    for (const d of this.defs) d.hp = DEF.hp;
     for (const c of this.cribs.values()) for (const d of c.doors) { d.hp = DOOR_LEVEL_HP[c.level]; d.open = false; d.openUntil = 0; }
     for (const p of this.players.values()) {
       this.spawn(p);
@@ -559,21 +718,21 @@ export class Room {
     if (win) for (const p of this.bros) if (!p.npc) this.cashDelta(p, CASH.surviveNight, 'survived the night');
     this.broadcast({ t: 'result', win, night: this.night, mvp });
     this.broadcast({ t: 'scores', rows: this.scoreRows() });
-    this.feed.push({ k: 'info', text: win ? 'W. The bros touched grass.' : 'L + ratio. The Bill Collectors won.' });
+    this.feed.push({ k: 'info', text: win ? 'W. The bros touched grass.' : 'L + ratio. The Opps won.' });
     this.setPhase('touchgrass');
   }
 
   private adjustAis(initial = false) {
-    const want = Math.max(0, Math.ceil(this.bros.length / BROS_PER_MONSTER) - this.collectorPlayers.length);
+    const want = Math.max(0, Math.ceil(this.bros.length / BROS_PER_MONSTER) - this.oppPlayers.length);
     while (this.ais.length < want) {
       const [x, y] = this.edgeSpawn();
       const n = aiSeq++;
       this.ais.push({
-        id: `ai-${n}`, name: `Bill Collector #${this.ais.length + 1}`, x, y, path: [], goal: null, chase: null, chaseUntil: 0,
+        id: `ai-${n}`, name: `Opp #${this.ais.length + 1}`, x, y, path: [], goal: null, chase: null, chaseUntil: 0,
         replanAt: 0, stunUntil: 0, stunFrom: [0, 0], smashNoiseT: 0, hunchAt: now() + 6 + Math.random() * 6,
         stats: freshStats(),
       });
-      if (!initial) this.feed.push({ k: 'info', text: 'Another Bill Collector crawled out.' });
+      if (!initial) this.feed.push({ k: 'info', text: 'Another Opp crawled out.' });
     }
     if (this.ais.length > want) this.ais.length = want;
   }
@@ -595,10 +754,12 @@ export class Room {
     this.stepPhase(t);
     this.stepEvents(t);
     this.stepPlayers(t);
+    this.stepClaims();
     if (this.phase === 'lockin') this.stepAis(t);
     this.stepDoors(t);
     this.stepDrops(t);
     this.stepProps(t);
+    this.stepDefs(t);
     this.stepKnocks(t);
     this.noises = this.noises.filter((n) => t - n.t < NOISE.lifeSec);
 
@@ -626,11 +787,11 @@ export class Room {
 
   private stepEvents(t: number) {
     const ev = this.ev;
-    if (ev.mode && t >= ev.modeEnd) this.endMode(null);
+    if (ev.mode && t >= ev.modeEnd) this.endMode();
     if (this.phase !== 'lockin' || ev.mode || t < ev.nextAt) return;
     ev.nextAt = t + EVENTS.gapMinSec + Math.random() * (EVENTS.gapMaxSec - EVENTS.gapMinSec);
     const options: Array<ModeName | 'aurarain'> = ['blackout', 'blackout', 'fog', 'lowgrav', 'disco', 'aurarain'];
-    if (this.ais.length + this.collectorPlayers.length > 0) options.push('rage');
+    if (this.ais.length + this.oppPlayers.length > 0) options.push('rage');
     const pick = options[Math.floor(Math.random() * options.length)];
     if (pick === 'aurarain') {
       for (let i = 0; i < EVENTS.auraRainDrops; i++) {
@@ -643,35 +804,26 @@ export class Room {
     ev.mode = pick;
     ev.modeEnd = t + EVENTS.minSec + Math.random() * (EVENTS.maxSec - EVENTS.minSec);
     const text: Record<ModeName, string> = {
-      blackout: 'POWER CUT! Lights out. Fix the generator in the plaza (hold R) to end it early.',
+      blackout: 'POWER CUT! Lights out, lamps and aura lamps are dead. Stay quiet till it comes back.',
       fog: 'OHIO FOG rolled in. You can barely see.',
-      rage: 'BILL COLLECTOR RAGE. Late fees doubled: they are faster.',
+      rage: 'OPP RAGE. They are tweaking: way faster.',
       lowgrav: 'LOW GRAVITY. Jumps go way higher.',
-      disco: 'DISCO MODE. The music confuses the Bill Collectors: they hear less.',
+      disco: 'DISCO MODE. The music confuses the Opps: they hear less.',
     };
-    if (pick === 'blackout') { ev.power = false; ev.powerWork = 0; }
+    if (pick === 'blackout') ev.power = false;
     this.feed.push({ k: 'event', text: text[pick] });
   }
 
-  private endMode(by: Player | null) {
+  private endMode() {
     const was = this.ev.mode;
     this.ev.mode = null;
     this.ev.modeEnd = 0;
-    if (was === 'blackout') this.restorePower(by);
+    if (was === 'blackout') this.restorePower();
   }
 
-  private restorePower(by: Player | null) {
-    if (this.ev.mode === 'blackout') { this.ev.mode = null; this.ev.modeEnd = 0; }
+  private restorePower() {
     this.ev.power = true;
-    this.ev.powerWork = 0;
-    if (by) {
-      by.stats.score += 10;
-      this.auraDelta(by, AURA_DELTA.generator, 'fixed the generator');
-      this.cashDelta(by, CASH.generator, 'fixed the generator');
-      this.feed.push({ k: 'event', text: `${by.name} fixed the generator. Power's back.` });
-    } else {
-      this.feed.push({ k: 'event', text: 'Power came back on.' });
-    }
+    this.feed.push({ k: 'event', text: 'Power came back on.' });
   }
 
   private stepPlayers(t: number) {
@@ -682,7 +834,7 @@ export class Room {
       const { dx, dy, zoom } = p.input;
       const moving = dx !== 0 || dy !== 0;
 
-      if (p.role === 'collector') {
+      if (p.role === 'opp') {
         if (t < p.stunUntil) {
           const a = Math.atan2(p.y - p.stunFrom[1], p.x - p.stunFrom[0]);
           [p.x, p.y] = move(p.x, p.y, Math.cos(a) * 2 * DT, Math.sin(a) * 2 * DT, this.R, this.doorLookup);
@@ -763,14 +915,13 @@ export class Room {
   }
 
   private repair(p: Player, t: number) {
-    // the generator during a power failure
-    if (!this.ev.power && dist(p.x, p.y, GENERATOR_POS[0], GENERATOR_POS[1]) < EVENTS.generatorRange) {
-      this.ev.powerWork += DT;
+    if (p.crib < 0) return;
+    const mine = this.defs.find((d) => d.owner === p.id && d.hp < DEF.hp && dist(d.x, d.y, p.x, p.y) < 1.5);
+    if (mine) {
+      mine.hp = Math.min(DEF.hp, mine.hp + DEF.repairPerSec * DT);
       this.makeRepairNoise(p);
-      if (this.ev.powerWork >= EVENTS.generatorWork) this.restorePower(p);
       return;
     }
-    if (p.crib < 0) return;
     const crib = this.cribs.get(p.crib);
     if (!crib) return;
     for (const side of [0, 1] as DoorSide[]) {
@@ -795,7 +946,7 @@ export class Room {
     }
   }
 
-  /** Ring-light mogs and catches, for both AI and player Bill Collectors. */
+  /** Ring-light mogs and catches, for both AI and player Opps. */
   private hunterChecks(h: { x: number; y: number; name: string; stunUntil: number; stunFrom: [number, number]; stats: RoundStats }, t: number) {
     if (t < h.stunUntil) return;
     for (const b of this.bros) {
@@ -804,7 +955,7 @@ export class Room {
         h.stunUntil = t + MOG_STUN_SEC;
         h.stunFrom = [b.x, b.y];
         this.auraDelta(b, -AURA.mogCost + AURA_DELTA.mogBonus, 'ring light mog');
-        this.cashDelta(b, CASH.mog, 'mogged a Bill Collector');
+        this.cashDelta(b, CASH.mog, 'mogged an Opp');
         if (b.aura <= 0) b.light = false;
         b.stats.mogs++;
         b.stats.score += 10;
@@ -819,12 +970,12 @@ export class Room {
         b.npc = true;
         b.light = false;
         b.rv = 0;
-        this.auraDelta(b, -Math.round(b.aura / 2), 'got collected');
+        this.auraDelta(b, -Math.round(b.aura / 2), 'got caught lackin');
         b.stats.caught++;
         h.stats.catches++;
         h.stats.score += 20;
         const hp = this.players.get((h as { id?: string }).id ?? '');
-        if (hp) this.cashDelta(hp, CASH.catch, 'collected a bro');
+        if (hp) this.cashDelta(hp, CASH.catch, 'caught a bro lackin');
         this.feed.push({ k: 'caught', a: h.name, b: b.name });
         this.knocksFrom(b.id);
       }
@@ -988,6 +1139,8 @@ export class Room {
       id: p.id, role: p.role, aura: Math.round(p.aura), crib: p.crib, cash: p.cash, inv: { ...p.inv },
       armor: crib?.level ?? 0, autorepair: !!crib?.autorepair,
       drink: Math.max(0, Math.ceil(p.drinkUntil - t)), bribe: Math.max(0, Math.ceil(p.bribeUntil - t)),
+      defLv: crib ? { ...crib.defLv } : { blaster: 1, lamp: 1, bass: 1 },
+      defCount: this.defs.filter((d) => d.plot === p.crib).length,
     };
   }
 
@@ -998,13 +1151,13 @@ export class Room {
 
   scoreRows(): ScoreRow[] {
     const rows: ScoreRow[] = [...this.players.values()].map((p) => ({
-      id: p.id, n: p.name, role: p.role, alive: p.role === 'collector' || !p.npc, score: Math.round(p.stats.score),
+      id: p.id, n: p.name, role: p.role, alive: p.role === 'opp' || !p.npc, score: Math.round(p.stats.score),
       catches: p.stats.catches, mogs: p.stats.mogs, revives: p.stats.revives, letIns: p.stats.letIns,
       caught: p.stats.caught, ping: p.ws ? p.ping : -1,
     }));
     for (const ai of this.ais) {
       rows.push({
-        id: ai.id, n: ai.name, role: 'collector', alive: true, score: Math.round(ai.stats.score), catches: ai.stats.catches,
+        id: ai.id, n: ai.name, role: 'opp', alive: true, score: Math.round(ai.stats.score), catches: ai.stats.catches,
         mogs: 0, revives: 0, letIns: 0, caught: 0, ping: 0, ai: true,
       });
     }
@@ -1037,19 +1190,19 @@ export class Room {
     for (const p of this.players.values()) {
       const z = p.jumpT > 0 ? Math.max(0, Math.sin(Math.PI * (1 - p.jumpT / this.jumpSec))) * this.jumpHeight : 0;
       all.push({
-        id: p.id, k: p.role === 'collector' ? 'collector' : p.npc ? 'npc' : 'bro', x: +p.x.toFixed(2), y: +p.y.toFixed(2), n: p.name,
+        id: p.id, k: p.role === 'opp' ? 'opp' : p.npc ? 'npc' : 'bro', x: +p.x.toFixed(2), y: +p.y.toFixed(2), n: p.name,
         l: p.light ? 1 : undefined, st: t < p.stunUntil ? 1 : undefined, rv: p.npc && p.rv > 0 ? +p.rv.toFixed(2) : undefined,
         c: p.hue, z: z > 0 ? +z.toFixed(2) : undefined, lit: p.light && !p.npc,
       });
     }
     for (const ai of this.ais) {
-      all.push({ id: ai.id, k: 'collector', x: +ai.x.toFixed(2), y: +ai.y.toFixed(2), n: ai.name, ai: 1, st: t < ai.stunUntil ? 1 : undefined, lit: false });
+      all.push({ id: ai.id, k: 'opp', x: +ai.x.toFixed(2), y: +ai.y.toFixed(2), n: ai.name, ai: 1, st: t < ai.stunUntil ? 1 : undefined, lit: false });
     }
     const litBros = all.filter((e) => e.lit);
     const alive = this.bros.filter((b) => !b.npc).length;
-    const counts = { bros: this.bros.length, alive, collectors: this.ais.length + this.collectorPlayers.length };
+    const counts = { bros: this.bros.length, alive, opps: this.ais.length + this.oppPlayers.length };
     const ev = {
-      power: this.ev.power, powerFix: +(this.ev.powerWork / EVENTS.generatorWork).toFixed(2), fog,
+      power: this.ev.power, fog,
       rage: this.ev.mode === 'rage', lowgrav: this.ev.mode === 'lowgrav', disco: this.ev.mode === 'disco',
       mode: this.ev.mode, modeEnd: Math.round(this.ev.modeEnd * 1000),
     };
@@ -1057,7 +1210,7 @@ export class Room {
 
     for (const p of this.players.values()) {
       if (!p.ws || p.ws.readyState !== 1) continue;
-      const monster = p.role === 'collector';
+      const monster = p.role === 'opp';
       let vision = p.light ? VISION.lit : VISION.dark;
       if (fog) vision *= 0.6;
       if (!this.ev.power) vision *= 0.85;
@@ -1067,10 +1220,10 @@ export class Room {
         if (d > INTEREST_RADIUS) continue;
         if (e.id !== p.id) {
           if (monster) {
-            // Bill Collectors are blind: they sense bros up close or see their ring lights
+            // Opps are blind: they sense bros up close or see their ring lights
             if (e.k === 'npc') continue;
             if (e.k === 'bro' && d > VISION.monster && !e.lit) continue;
-          } else if (e.k === 'collector') {
+          } else if (e.k === 'opp') {
             const seen = d <= vision || litBros.some((b) => dist(b.x, b.y, e.x, e.y) < 5);
             if (!seen) continue;
           }
@@ -1087,6 +1240,14 @@ export class Room {
       this.sendTo(p, {
         t: 'snap', now: Date.now(), phase: this.phase, phaseEnd: Math.round(this.phaseEnd * 1000), R: this.R, night: this.night,
         you: this.selfView(p), ents, cribs, noises, drops, counts, lobby, ev,
+        defs: this.defs
+          .filter((d) => dist(d.x, d.y, p.x, p.y) < INTEREST_RADIUS)
+          .map((d): DefView => ({
+            id: d.id, k: d.k, x: +d.x.toFixed(2), y: +d.y.toFixed(2), hp: Math.round((d.hp / DEF.hp) * 100),
+            lv: this.cribs.get(d.plot)?.defLv[d.k] ?? 1, own: d.owner === p.id ? 1 : undefined,
+            tx: t - d.shotT < 0.2 ? +d.tx.toFixed(2) : undefined, ty: t - d.shotT < 0.2 ? +d.ty.toFixed(2) : undefined,
+            off: d.k === 'lamp' && !this.ev.power ? 1 : undefined,
+          })),
         props: this.props
           .filter((pr) => dist(pr.x, pr.y, p.x, p.y) < INTEREST_RADIUS && (!monster || pr.k === 'decoy'))
           .map((pr): PropView => ({ id: pr.id, k: pr.k, x: +pr.x.toFixed(2), y: +pr.y.toFixed(2) })),

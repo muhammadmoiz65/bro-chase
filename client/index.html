@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>Bro Chase</title>
-  <meta name="description" content="Survive the night. Don't get collected. A brain-rot co-op survival horror game in your browser." />
+  <meta name="description" content="Survive the night. Don't get caught. A brain-rot co-op survival horror game in your browser." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2311121a'/><text x='32' y='44' font-size='30' font-family='Arial Black,Arial' font-weight='900' text-anchor='middle' fill='%23ff3b6b'>$</text></svg>" />
 </head>
 <body>
@@ -14,7 +14,7 @@
   <div id="menu" class="screen">
     <div class="menu-card">
       <h1 class="logo">BRO <span>CHASE</span></h1>
-      <p class="tag">survive the night. don't let the <b>Bill Collector</b> get you.</p>
+      <p class="tag">survive the night. don't let the <b>Opp</b> get you.</p>
 
       <div id="captcha-box" class="panel hidden">
         <h3>Quick check</h3>
@@ -32,7 +32,7 @@
           <label>Play as
             <select id="role-select">
               <option value="bro">Bro</option>
-              <option value="collector">Bill Collector (needs 4 bros each)</option>
+              <option value="opp">Opp (needs 4 bros each)</option>
             </select>
           </label>
         </div>
@@ -85,15 +85,15 @@
         </div>
 
         <div id="tab-help" class="tab-body hidden help">
-          <p>Each bro has a <b>crib</b> with a front and back door. Doors are <b>locked</b> by default. Bill Collectors are blind and hunt by <b>sound</b>: footsteps, sprinting, smashing and knocking all give you away. Walk mode is slow but nearly silent.</p>
+          <p>In pregame every bro picks a free <b>crib</b> by walking into it. Each crib has a front and back door. Doors are <b>locked</b> by default. Opps are blind and hunt by <b>sound</b>: footsteps, sprinting, smashing and knocking all give you away. Walk mode is slow but nearly silent.</p>
           <ul>
             <li><kbd>WASD</kbd> move, <kbd>C</kbd> walk mode (quiet), <kbd>Shift</kbd> sprint (loud), <kbd>Space</kbd> jump</li>
-            <li><kbd>F</kbd> ring light: mogs a Bill Collector that gets close, burns aura</li>
+            <li><kbd>F</kbd> ring light: mogs an Opp that gets close, burns aura</li>
             <li><kbd>E</kbd> open your door, or knock on a friend's (they choose to let you in)</li>
-            <li><kbd>R</kbd> hold to repair your doors, or fix the generator in a power failure</li>
+            <li><kbd>R</kbd> hold to repair your doors and defences</li>
             <li><kbd>Y</kbd>/<kbd>N</kbd> answer a knock, <kbd>Tab</kbd> scoreboard, <kbd>Enter</kbd> chat</li>
           </ul>
-          <p>Got collected? You're in <b>NPC mode</b>. A living bro standing next to you for 3 seconds brings you back. Survive until the timer runs out to touch grass.</p>
+          <p>Got caught? You're in <b>NPC mode</b>. A living bro standing next to you for 3 seconds brings you back. Survive until the timer runs out to touch grass.</p>
         </div>
       </div>
       <p id="menu-error" class="error"></p>
@@ -135,7 +135,7 @@
       <div><kbd>Space</kbd> jump</div>
       <div><kbd>F</kbd> ring light</div>
       <div><kbd>E</kbd> open door / knock</div>
-      <div><kbd>R</kbd> hold: repair / generator</div>
+      <div><kbd>R</kbd> hold: repair</div>
       <div><kbd>Y</kbd> <kbd>N</kbd> answer a knock</div>
       <div><kbd>+</kbd> <kbd>-</kbd> camera zoom</div>
       <div><kbd>B</kbd> shop · <kbd>1</kbd>-<kbd>4</kbd> items</div>
@@ -150,13 +150,13 @@
     </div>
     <div id="intro" class="hidden">
       <h2>BRO CHASE</h2>
-      <p class="intro-lead">Survive the night. <b>Bill Collectors</b> are coming for what you owe.</p>
+      <p class="intro-lead">Survive the night. The <b>Opps</b> are outside and they are not here to chat.</p>
       <ul class="intro-rules">
-        <li>Your <b>crib</b> has a front and a back door. Both stay <b>locked</b> unless you open them.</li>
-        <li>Bill Collectors are blind: they hunt by <b>sound</b>. Footsteps, sprinting and knocking give you away.</li>
+        <li>Pregame: walk into any <b>free crib</b> to make it yours. Your crib has a front and a back door. Both stay <b>locked</b> unless you open them.</li>
+        <li>Opps are blind: they hunt by <b>sound</b>. Footsteps, sprinting and knocking give you away.</li>
         <li>If one smashes in, run out the other door to a friend's crib and <b>knock</b>. They decide if you get in.</li>
         <li>Grab <b>cash</b> and spend it in the <b>shop (B)</b>: stronger doors, banana peels, energy drinks, decoys, bribes.</li>
-        <li>Got collected? A living bro next to you for 3 seconds brings you back. Survive until the timer hits 0.</li>
+        <li>Got caught? A living bro next to you for 3 seconds brings you back. Survive until the timer hits 0.</li>
       </ul>
       <div class="intro-keys">
         <span><kbd>WASD</kbd> move</span><span><kbd>C</kbd> walk (quiet)</span><span><kbd>Shift</kbd> sprint (loud)</span>
@@ -182,7 +182,7 @@
       <p class="muted small" id="lobby-host"></p>
       <div class="row">
         <button id="btn-role-bro" class="small">Play as bro</button>
-        <button id="btn-role-six" class="small">Play as Bill Collector</button>
+        <button id="btn-role-six" class="small">Play as Opp</button>
       </div>
       <button id="btn-start" class="big hidden">START THE NIGHT</button>
     </div>
@@ -191,7 +191,7 @@
       <h2 id="score-title">Scoreboard</h2>
       <div class="teams">
         <div><h3>Bros</h3><table id="score-bros"></table></div>
-        <div><h3>Bill Collectors</h3><table id="score-six"></table></div>
+        <div><h3>Opps</h3><table id="score-six"></table></div>
       </div>
     </div>
     <button id="btn-leave" class="ghost small">Leave</button>

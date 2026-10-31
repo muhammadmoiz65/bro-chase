@@ -1,11 +1,11 @@
 // Messages between the browser and the game server (JSON over WebSocket).
 
 import type { CribView, DoorSide } from './world.ts';
-import type { ItemId, ShopId } from './constants.ts';
+import type { DefKind, ItemId, ShopId } from './constants.ts';
 
-export type Role = 'bro' | 'collector';
+export type Role = 'bro' | 'opp';
 export type Phase = 'lobby' | 'pregame' | 'lockin' | 'touchgrass';
-export type EntKind = 'bro' | 'npc' | 'collector';
+export type EntKind = 'bro' | 'npc' | 'opp';
 
 export interface EntView {
   id: string;
@@ -14,7 +14,7 @@ export interface EntView {
   y: number;
   n: string; // display name
   l?: 1; // ring light on
-  ai?: 1; // AI-controlled Bill Collector
+  ai?: 1; // AI-controlled Opp
   st?: 1; // stunned (mogged)
   rv?: number; // revive progress 0..1 for NPCs
   c?: number; // colour hue 0..359
@@ -25,14 +25,18 @@ export interface SelfView {
   id: string;
   role: Role;
   aura: number;
-  crib: number; // plot index of own crib, -1 for Bill Collectors
+  crib: number; // plot index of own crib, -1 for Opps
   cash: number;
   inv: Record<ItemId, number>;
   armor: number; // crib door level 0..3
   autorepair: boolean;
   drink: number; // seconds left
   bribe: number; // seconds left
+  defLv: Record<DefKind, number>; // 1..3 per type
+  defCount: number;
 }
+
+export interface DefView { id: number; k: DefKind; x: number; y: number; hp: number; lv: number; own?: 1; tx?: number; ty?: number; off?: 1 }
 
 export interface PropView { id: number; k: 'trap' | 'decoy'; x: number; y: number }
 
@@ -49,7 +53,6 @@ export type ModeName = 'blackout' | 'fog' | 'rage' | 'lowgrav' | 'disco';
 
 export interface WorldEvents {
   power: boolean; // street lamps + crib lights on
-  powerFix: number; // generator repair progress 0..1 during a power cut
   fog: boolean;
   rage: boolean;
   lowgrav: boolean;
@@ -67,7 +70,7 @@ export interface LobbyListing {
   quick: boolean;
 }
 
-export type NoiseKind = 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog' | 'decoy';
+export type NoiseKind = 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog' | 'decoy' | 'bass';
 export interface NoiseView { id: number; x: number; y: number; r: number; k: NoiseKind }
 export interface DropView { id: number; x: number; y: number; k: 'aura' | 'cash' }
 
@@ -77,11 +80,11 @@ export interface ScoreRow {
   role: Role;
   alive: boolean;
   score: number;
-  catches: number; // Bill Collector: bros caught
-  mogs: number; // bro: Bill Collectors stunned with the ring light
+  catches: number; // Opp: bros caught
+  mogs: number; // bro: Opps stunned with the ring light
   revives: number;
   letIns: number;
-  caught: number; // times this bro got collected
+  caught: number; // times this bro got caught lackin
   ping: number;
   ai?: boolean;
 }
@@ -104,7 +107,8 @@ export type ServerMsg =
       noises: NoiseView[];
       drops?: DropView[];
       props: PropView[];
-      counts: { bros: number; alive: number; collectors: number };
+      defs: DefView[];
+      counts: { bros: number; alive: number; opps: number };
       lobby: LobbyInfo;
       ev: WorldEvents;
     }
@@ -124,6 +128,8 @@ export type ClientMsg =
   | { t: 'jump' }
   | { t: 'buy'; item: ShopId }
   | { t: 'item'; item: ItemId }
+  | { t: 'build'; kind: DefKind }
+  | { t: 'upgrade'; kind: DefKind }
   | { t: 'light' } // toggle ring light
   | { t: 'use' } // open own door / knock / smash
   | { t: 'repair'; on: boolean }

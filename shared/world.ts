@@ -93,7 +93,7 @@ export function doorCells(i: number, side: DoorSide): Array<[number, number]> {
   return [[cx - 1, y], [cx, y]];
 }
 
-export type CellKind = 'floor' | 'street' | 'wall' | 'door' | 'pillar' | 'bound' | 'fence' | 'lamp' | 'generator';
+export type CellKind = 'floor' | 'street' | 'wall' | 'door' | 'pillar' | 'bound' | 'fence' | 'lamp';
 
 export interface CellInfo {
   kind: CellKind;
@@ -115,8 +115,7 @@ export function cellAt(x: number, y: number, R: number): CellInfo {
   const ly = y - cy;
   if (lx === -6 && ly === -6) return { kind: 'lamp', plot };
   if (plot === 0) {
-    // plaza: the generator in the middle, four pillars around it
-    if ((lx === -1 || lx === 0) && (ly === -1 || ly === 0)) return { kind: 'generator', plot };
+    // plaza: open square with four pillars
     if ((lx === -4 || lx === 3) && (ly === -4 || ly === 3)) return { kind: 'pillar', plot };
     return { kind: 'street', plot };
   }
@@ -151,7 +150,7 @@ export interface MoveFlags { ghost?: boolean; airborne?: boolean }
 export function solid(x: number, y: number, R: number, doors: DoorLookup, f: MoveFlags = {}): boolean {
   const c = cellAt(x, y, R);
   switch (c.kind) {
-    case 'wall': case 'bound': case 'pillar': case 'lamp': case 'generator':
+    case 'wall': case 'bound': case 'pillar': case 'lamp':
       return true;
     case 'fence':
       return !f.ghost && !f.airborne;
@@ -204,4 +203,3 @@ export function overFence(x: number, y: number, R: number): boolean {
   return false;
 }
 
-export const GENERATOR_POS: [number, number] = [0, 0];
