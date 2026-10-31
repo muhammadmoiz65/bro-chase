@@ -6,6 +6,7 @@ import { startServer } from '../server/index.ts';
 import { solvePow } from '../server/captcha.ts';
 import { doorCenter, plotCenter } from '../shared/world.ts';
 import type { ServerMsg } from '../shared/protocol.ts';
+import { CRIB_HALF } from '../shared/constants.ts';
 
 // ---------- room-level tests with fake sockets ----------
 
@@ -38,11 +39,15 @@ function settle(r: Room, id: string) {
   tick(r);
 }
 
+/** Fresh player ids per room. (players.size can't be used: bot bros come and go, so ids would collide and a join would turn into a reconnect.) */
+const seqs = new WeakMap<Room, number>();
 function joinN(r: Room, n: number, role: 'bro' | 'opp' = 'bro', home = true) {
   const out: Array<{ id: string; ws: FakeWs }> = [];
   for (let i = 0; i < n; i++) {
     const ws = new FakeWs();
-    const id = `p${r.players.size + 1}`;
+    const seq = (seqs.get(r) ?? 0) + 1;
+    seqs.set(r, seq);
+    const id = `p${seq}`;
     r.join(id, `Bro${id}`, ws as any, role);
     out.push({ id, ws });
     if (home && r.players.get(id)!.role === 'bro') settle(r, id);
@@ -102,6 +107,26 @@ test('bros spawn homeless, claim a free crib by walking in, and lock-in houses e
   assert.equal(new Set([pa.crib, pb.crib, r.players.get(c.id)!.crib]).size, 3);
   joinN(r, 12, 'bro', false);
   assert.ok((2 * r.R + 1) ** 2 - 1 >= 15 + 3, 'the map grows with players');
+});
+
+test('claiming a crib from the doorway never traps you in your own door', async () => {
+  const r = makeRoom();
+  const [a] = joinN(r, 1, 'bro', false);
+  const p = r.players.get(a.id)!;
+  const [cx, cy] = plotCenter(1);
+  // just inside the back door: centre on a floor cell, body still overlapping the door cells
+  [p.x, p.y] = [cx - 0.5, cy - CRIB_HALF + 1.02];
+  tick(r);
+  assert.equal(p.crib, 1);
+  const back = r.cribs.get(1)!.doors[1];
+  assert.equal(back.open, true, 'door waits for the doorway to clear');
+  p.input = { dx: 0, dy: 1, zoom: false, sneak: false };
+  tick(r, 10);
+  assert.ok(p.y > cy - CRIB_HALF + 1.6, `walked inside (y=${p.y})`);
+  p.input = { dx: 0, dy: 0, zoom: false, sneak: false };
+  await new Promise((res) => setTimeout(res, 350)); // the door re-checks the doorway every 0.3s
+  tick(r);
+  assert.equal(back.open, false, 'and it locks once you are clear');
 });
 
 test('knocking asks the owner; the door opens only on approval', () => {

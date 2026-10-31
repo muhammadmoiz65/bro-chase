@@ -302,7 +302,9 @@ export class Room {
 
   private claimCrib(p: Player, i: number) {
     if (p.crib >= 0) this.releaseCrib(p);
-    const fresh = (): Door => ({ hp: DOOR.maxHp, open: false, openUntil: 0 });
+    // doors start "open, closing now": stepDoors shuts them this tick unless someone is standing in
+    // the doorway (the bro who just walked in, or a friend behind them), so nobody gets stuck in a wall
+    const fresh = (): Door => ({ hp: DOOR.maxHp, open: true, openUntil: 0 });
     this.cribs.set(i, { owner: p.id, ownerName: p.name, doors: [fresh(), fresh()], level: 0, autorepair: false, defLv: { blaster: 1, lamp: 1, bass: 1 } });
     p.crib = i;
     this.ensureRoom();
