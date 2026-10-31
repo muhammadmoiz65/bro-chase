@@ -2,7 +2,8 @@
 // Game logic is flat (x, y tiles); Three.js uses x -> x, y -> z, with y up.
 
 import * as THREE from 'three';
-import { PLOT, RING_LIGHT_RANGE } from '../../shared/constants.ts';
+import { DOOR_LEVEL_HP, PLOT, RING_LIGHT_RANGE } from '../../shared/constants.ts';
+import { applyGear, makeDefence, makeDoor, tickUpgrades } from './upgrades.ts';
 import { cellAt, doorCenter, plotCenter, type CribView } from '../../shared/world.ts';
 import type { DefView, DropView, EntView, PropView, WorldEvents } from '../../shared/protocol.ts';
 
@@ -118,13 +119,13 @@ export class Renderer {
   private floorMatOff: THREE.MeshStandardMaterial;
   private floorMatMine: THREE.MeshStandardMaterial;
   private floorTex: THREE.Texture;
-  private doors = new Map<string, THREE.Mesh>();
+  private doors = new Map<string, THREE.Group>();
   private cribLabels = new Map<number, { sprite: THREE.Sprite; text: string }>();
   private bros = new Map<string, BroMesh>();
   private opps = new Map<string, OppMesh>();
   private drops = new Map<number, THREE.Mesh>();
   private props = new Map<number, THREE.Object3D>();
-  private defs = new Map<number, { g: THREE.Group; head?: THREE.Object3D; glow?: THREE.Mesh; bar: THREE.Mesh; lv: number; k: string }>();
+  private defs = new Map<number, { g: THREE.Group; bar: THREE.Mesh; lv: number; k: string }>();
   private shots: Array<{ m: THREE.Object3D; born: number }> = [];
   private ripples: Array<{ mesh: THREE.Mesh; born: number; r: number }> = [];
   private seenNoise = new Set<number>();
@@ -335,19 +336,20 @@ export class Renderer {
       for (const side of [0, 1] as const) {
         const key = `${c.i}-${side}`;
         seen.add(key);
+        const level = Math.max(0, DOOR_LEVEL_HP.indexOf(c.max));
         let m = this.doors.get(key);
-        if (!m) {
-          m = new THREE.Mesh(new THREE.BoxGeometry(2, 1.35, 0.22), new THREE.MeshStandardMaterial({ color: 0xb07a3c, roughness: 0.6 }));
+        if (!m || m.userData.level !== level) {
+          // each door armor level has its own look: wood, iron-banded, steel blast door, Sigma vault
+          const old = m;
+          m = makeDoor(level, cribStyle(c.i).door);
           const [x, y] = doorCenter(c.i, side);
-          m.position.set(x, 0.68, y);
-          m.castShadow = true;
+          m.position.set(x, old ? old.position.y : 0.68, y);
+          old?.removeFromParent();
           this.scene.add(m);
           this.doors.set(key, m);
         }
         const d = c.doors[side];
-        const mat = m.material as THREE.MeshStandardMaterial;
-        const hp = Math.max(0, Math.min(1, d.hp / c.max));
-        mat.color.setHex(cribStyle(c.i).door).lerp(DOOR_BROKEN, 1 - hp); // crib's own paint, going red as it breaks
+        (m.userData.setHp as (f: number) => void)(d.hp / Math.max(1, c.max));
         const targetY = d.hp <= 0 ? 0.1 : d.open ? 2.1 : 0.68;
         m.userData.targetY = targetY;
         m.scale.y = d.hp <= 0 ? 0.15 : 1;
@@ -446,6 +448,7 @@ export class Renderer {
     reviveRing.position.y = 0.05;
     reviveRing.visible = false;
     group.add(body, head, ring, label, reviveRing);
+    applyGear(group, e.gk ?? 0, e.gv ?? 0);
     this.scene.add(group);
     return { group, body, ring, label, reviveRing, kind: e.k, name: e.n };
   }
@@ -568,47 +571,18 @@ export class Renderer {
   }
 
   private makeDef(d: DefView) {
-    const g = new THREE.Group();
-    const lvScale = 1 + (d.lv - 1) * 0.15;
-    let head: THREE.Object3D | undefined;
-    let glow: THREE.Mesh | undefined;
-    const metal = new THREE.MeshStandardMaterial({ color: 0x3a3d4a, metalness: 0.4, roughness: 0.5 });
-    if (d.k === 'blaster') {
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.38, 0.4, 12), metal);
-      base.position.y = 0.2;
-      const h = new THREE.Group();
-      h.position.y = 0.55;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.3, 0.4), new THREE.MeshStandardMaterial({ color: 0xff3b6b }));
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.55, 8), new THREE.MeshStandardMaterial({ color: 0xffd23f }));
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.z = 0.35;
-      h.add(body, barrel);
-      g.add(base, h);
-      head = h;
-    } else if (d.k === 'lamp') {
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 1.2, 8), metal);
-      pole.position.y = 0.6;
-      glow = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.06, 8, 24), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff1d6, emissiveIntensity: 2.5 }));
-      glow.position.y = 1.3;
-      g.add(pole, glow);
-    } else if (d.k === 'bass') {
-      const box = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.6), new THREE.MeshStandardMaterial({ color: 0x15161c }));
-      box.position.y = 0.45;
-      const cone = new THREE.Mesh(new THREE.CircleGeometry(0.24, 20), new THREE.MeshStandardMaterial({ color: 0x777788, emissive: 0x3bd1ff, emissiveIntensity: 0.6 }));
-      cone.position.set(0, 0.5, 0.31);
-      g.add(box, cone);
-      head = box;
-    }
-    g.scale.setScalar(lvScale);
+    // every defence level has its own model (see upgrades.ts)
+    const g = makeDefence(d.k, d.lv);
+    const top = d.k === 'lamp' ? 2.1 : d.k === 'bass' && d.lv === 3 ? 1.5 : 1.7;
     const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.08), new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false }));
-    bar.position.y = 1.7;
+    bar.position.y = top;
     bar.renderOrder = 11;
     const lvTag = textSprite(`Lv${d.lv}`, '#ffd23f', 24, 'rgba(0,0,0,0.5)');
-    lvTag.position.y = 1.92;
+    lvTag.position.y = top + 0.22;
     g.add(bar, lvTag);
     g.position.set(d.x, 0, d.y);
     this.scene.add(g);
-    return { g, head, glow, bar, lv: d.lv, k: d.k };
+    return { g, bar, lv: d.lv, k: d.k };
   }
 
   setDefs(defs: DefView[]) {
@@ -622,13 +596,12 @@ export class Renderer {
       m.bar.scale.x = Math.max(0.01, hp);
       (m.bar.material as THREE.MeshBasicMaterial).color.setHex(hp > 0.5 ? 0x4ade80 : hp > 0.25 ? 0xffd23f : 0xff4d4d);
       m.bar.quaternion.copy(this.camera.quaternion);
-      if (m.glow) (m.glow.material as THREE.MeshStandardMaterial).emissiveIntensity = d.off ? 0.05 : 2.5;
+      (m.g.userData.setOff as (off: boolean) => void)(!!d.off);
       if (d.tx !== undefined && d.ty !== undefined) {
-        if (m.k === 'blaster' && m.head) {
-          m.head.rotation.y = Math.atan2(d.tx - d.x, d.ty - d.y);
-          this.shot(d.x, d.y, d.tx, d.ty, 0xffd23f);
-        } else if (m.k === 'lamp') this.shot(d.x, d.y, d.tx, d.ty, 0xfff1d6);
-        else if (m.k === 'bass' && m.head) this.addNoise(-d.id - Math.floor(performance.now() / 400), d.x, d.y, 4);
+        (m.g.userData.fire as (aim: number) => void)(Math.atan2(d.tx - d.x, d.ty - d.y));
+        if (m.k === 'blaster') this.shot(d.x, d.y, d.tx, d.ty, d.lv === 3 ? 0xffc83d : 0xff5fa2);
+        else if (m.k === 'lamp') this.shot(d.x, d.y, d.tx, d.ty, 0xe9c8ff);
+        else if (m.k === 'bass') this.addNoise(-d.id - Math.floor(performance.now() / 400), d.x, d.y, 3 + d.lv);
       }
     }
     for (const [id, m] of this.defs) if (!seen.has(id)) { m.g.removeFromParent(); this.defs.delete(id); }
@@ -751,6 +724,9 @@ export class Renderer {
       m.group.position.set(e.x, (e.z ?? 0) + bob, e.y);
       const mv = new THREE.Vector3(e.x - prev.x, 0, e.y - prev.z);
       if (mv.lengthSq() > 1e-5) m.group.rotation.y = Math.atan2(mv.x, mv.z);
+      if (m.group.userData.gearKey !== `${e.gk ?? 0}:${e.gv ?? 0}`) applyGear(m.group, e.gk ?? 0, e.gv ?? 0);
+      const gear = m.group.userData.gear as THREE.Group;
+      (gear.userData.setShield as (on: boolean, t: number) => void)(!!e.sh && !npc, t);
       const bm = m.body.material as THREE.MeshStandardMaterial;
       bm.transparent = npc;
       bm.opacity = npc ? 0.35 : 1;
@@ -801,8 +777,11 @@ export class Renderer {
     });
     for (const d of this.defs.values()) {
       d.bar.quaternion.copy(this.camera.quaternion);
-      if (d.k === 'lamp' && d.glow) d.glow.rotation.z += dt;
+      tickUpgrades(d.g, t);
     }
+    // animated upgrade pieces: vault wheels, kick wings, armour sparkles, defences
+    for (const d of this.doors.values()) tickUpgrades(d, t);
+    for (const b of this.bros.values()) if (b.group.userData.gear) tickUpgrades(b.group.userData.gear as THREE.Group, t);
 
     // drops spin
     for (const d of this.drops.values()) { d.rotation.y += dt * 2; d.position.y = 0.45 + Math.sin(t / 400 + d.id) * 0.08; }

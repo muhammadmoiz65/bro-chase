@@ -4,7 +4,7 @@
 
 import type { WebSocket } from 'ws';
 import {
-  AURA, AURA_DELTA, BROS_PER_MONSTER, CASH, DEF, DEF_KINDS, DEFENCE, DOOR_LEVEL_HP, ITEM, SHOP, type DefKind, type ItemId, type ShopId, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
+  AURA, AURA_DELTA, BROS_PER_MONSTER, CASH, DEF, DEF_KINDS, DEFENCE, DOOR_LEVEL_HP, GEAR, ITEM, SHOP, type DefKind, type ItemId, type ShopId, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
   PHASE_SEC, PLOT, RECONNECT_GRACE_SEC, REVIVE_RANGE, REVIVE_SEC, RING_LIGHT_RANGE, SPEED, TICK_RATE, VISION,
 } from '../shared/constants.ts';
 import type {
@@ -15,6 +15,7 @@ import {
   ringFor, type CribView, type DoorSide, type DoorState,
 } from '../shared/world.ts';
 import { findPath } from './path.ts';
+import { airborne as isAirborne, freshJump, kicksSpeed, stepJump, tryJump, type JumpState } from '../shared/gear.ts';
 
 const DT = 1 / TICK_RATE;
 
@@ -44,7 +45,9 @@ interface Player {
   light: boolean;
   aura: number;
   input: { dx: number; dy: number; zoom: boolean; sneak: boolean };
-  jumpT: number; jumpCd: number;
+  jump: JumpState;
+  kicks: number; vest: number; // gear tiers 0..3, kept between nights
+  shields: number; shieldUntil: number;
   crib: number;
   stunUntil: number; stunFrom: [number, number];
   repairing: boolean;
@@ -168,7 +171,7 @@ export class Room {
       }
       p = {
         id: accountId, name, role, ws, leftAt: 0, x: 0, y: 0, npc: false, light: false, aura: AURA.start,
-        input: { dx: 0, dy: 0, zoom: false, sneak: false }, jumpT: 0, jumpCd: 0, crib: -1, stunUntil: 0, stunFrom: [0, 0],
+        input: { dx: 0, dy: 0, zoom: false, sneak: false }, jump: freshJump(), kicks: 0, vest: 0, shields: 0, shieldUntil: 0, crib: -1, stunUntil: 0, stunFrom: [0, 0],
         repairing: false, rv: 0, hue: hueOf(accountId), cash: CASH.start, inv: { trap: 0, drink: 0, decoy: 0, bribe: 0 },
         drinkUntil: 0, bribeUntil: 0, cashT: 0, stats: freshStats(), ping: 0, stepT: 0,
         repairNoiseT: 0, smashCd: 0, chatTimes: [],
@@ -327,7 +330,9 @@ export class Room {
         break;
       }
       case 'jump':
-        if (p.role === 'bro' && !p.npc && p.jumpT <= 0 && p.jumpCd <= 0) p.jumpT = this.jumpSec;
+        if (p.role === 'bro' && !p.npc && tryJump(p.jump, p.kicks, this.ev.mode === 'lowgrav') === 'air') {
+          this.noise(p.x, p.y, JUMP.landNoise, p.id, 'land'); // the kicks squeak
+        }
         break;
       case 'light':
         if (p.role === 'bro' && !p.npc) p.light = !p.light && p.aura > 0;
@@ -497,6 +502,9 @@ export class Room {
     } else if (item === 'autorepair') {
       if (!crib || crib.autorepair) return;
       price = def.price as number;
+    } else if (item === 'kicks' || item === 'vest') {
+      if (p[item] >= GEAR.maxTier) return this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', sys: true, text: `Your ${def.name.toLowerCase()} are already max tier.` });
+      price = (def.price as number[])[p[item]];
     } else price = def.price as number;
     if (p.cash < price) return this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', sys: true, text: `Not enough cash: ${def.name} costs $${price}.` });
     this.cashDelta(p, -price, def.name);
@@ -505,7 +513,11 @@ export class Room {
       const max = DOOR_LEVEL_HP[crib!.level];
       for (const d of crib!.doors) if (d.hp > 0) d.hp = Math.min(max, d.hp + (max - DOOR_LEVEL_HP[crib!.level - 1]));
     } else if (item === 'autorepair') crib!.autorepair = true;
-    else if (item === 'aura') this.auraDelta(p, 40, 'aura pack');
+    else if (item === 'kicks') p.kicks++;
+    else if (item === 'vest') {
+      p.vest++;
+      p.shields = GEAR.vest[p.vest].shields; // a fresh suit is fully charged
+    } else if (item === 'aura') this.auraDelta(p, 40, 'aura pack');
     else p.inv[item]++;
   }
 
@@ -638,8 +650,6 @@ export class Room {
     if (real !== 0 || d < 0) this.sendTo(p, { t: 'aura', d: real || d, why });
   }
 
-  private get jumpSec() { return this.ev.mode === 'lowgrav' ? JUMP.lowGravSec : JUMP.sec; }
-  private get jumpHeight() { return this.ev.mode === 'lowgrav' ? JUMP.lowGravHeight : JUMP.height; }
 
   private hitDoor(plot: number, side: DoorSide, dmg: number, by: string, stats: RoundStats) {
     const c = this.cribs.get(plot);
@@ -699,7 +709,9 @@ export class Room {
       this.spawn(p);
       p.aura = AURA.start;
       p.stats = freshStats();
-      p.jumpT = 0;
+      p.jump = freshJump();
+      p.shields = GEAR.vest[p.vest].shields;
+      p.shieldUntil = 0;
       p.drinkUntil = 0;
       p.bribeUntil = 0;
     }
@@ -830,7 +842,6 @@ export class Room {
     const rage = this.ev.mode === 'rage';
     for (const p of this.players.values()) {
       p.smashCd = Math.max(0, p.smashCd - DT);
-      p.jumpCd = Math.max(0, p.jumpCd - DT);
       const { dx, dy, zoom } = p.input;
       const moving = dx !== 0 || dy !== 0;
 
@@ -855,16 +866,12 @@ export class Room {
         if (moving) [p.x, p.y] = move(p.x, p.y, dx * SPEED.npc * DT, dy * SPEED.npc * DT, this.R, this.doorLookup, { ghost: true });
         continue;
       }
-      if (p.jumpT > 0) {
-        p.jumpT -= DT;
-        if (p.jumpT <= 0) {
-          if (overFence(p.x, p.y, this.R)) p.jumpT = 0.05; // keep floating until clear of the fence
-          else { p.jumpT = 0; p.jumpCd = JUMP.cooldown; this.noise(p.x, p.y, JUMP.landNoise, p.id, 'land'); }
-        }
+      if (stepJump(p.jump, DT, this.ev.mode === 'lowgrav', overFence(p.x, p.y, this.R))) {
+        this.noise(p.x, p.y, JUMP.landNoise, p.id, 'land');
       }
-      const airborne = p.jumpT > 0;
+      const airborne = isAirborne(p.jump);
       const sneak = p.input.sneak;
-      const sp = (zoom ? SPEED.zoom : sneak ? SPEED.sneak : SPEED.walk) * (t < p.drinkUntil ? ITEM.drinkSpeed : 1);
+      const sp = (zoom ? SPEED.zoom : sneak ? SPEED.sneak : SPEED.walk) * (t < p.drinkUntil ? ITEM.drinkSpeed : 1) * kicksSpeed(p.kicks);
       if (moving) {
         [p.x, p.y] = move(p.x, p.y, dx * sp * DT, dy * sp * DT, this.R, this.doorLookup, { airborne });
         if ((p.stepT -= DT) <= 0 && !airborne) {
@@ -965,8 +972,18 @@ export class Room {
       }
     }
     for (const b of this.bros) {
-      if (b.npc || b.jumpT > 0 || t < b.bribeUntil) continue; // mid-air or bribed bros can't be grabbed
+      if (b.npc || isAirborne(b.jump) || t < b.bribeUntil || t < b.shieldUntil) continue; // mid-air, bribed or just-shielded bros can't be grabbed
       if (dist(h.x, h.y, b.x, b.y) < CATCH_RANGE) {
+        if (b.shields > 0) {
+          // body armour eats the grab and knocks the Opp back
+          b.shields--;
+          b.shieldUntil = t + GEAR.shieldSafeSec;
+          h.stunUntil = t + GEAR.shieldStunSec;
+          h.stunFrom = [b.x, b.y];
+          this.noise(b.x, b.y, NOISE.mog, b.id, 'mog');
+          this.feed.push({ k: 'info', text: `${b.name}'s armour blocked ${h.name}! (${b.shields} left)` });
+          continue;
+        }
         b.npc = true;
         b.light = false;
         b.rv = 0;
@@ -1137,7 +1154,7 @@ export class Room {
     const t = now();
     return {
       id: p.id, role: p.role, aura: Math.round(p.aura), crib: p.crib, cash: p.cash, inv: { ...p.inv },
-      armor: crib?.level ?? 0, autorepair: !!crib?.autorepair,
+      armor: crib?.level ?? 0, autorepair: !!crib?.autorepair, kicks: p.kicks, vest: p.vest, shields: p.shields,
       drink: Math.max(0, Math.ceil(p.drinkUntil - t)), bribe: Math.max(0, Math.ceil(p.bribeUntil - t)),
       defLv: crib ? { ...crib.defLv } : { blaster: 1, lamp: 1, bass: 1 },
       defCount: this.defs.filter((d) => d.plot === p.crib).length,
@@ -1188,11 +1205,12 @@ export class Room {
 
     const all: Array<EntView & { lit: boolean }> = [];
     for (const p of this.players.values()) {
-      const z = p.jumpT > 0 ? Math.max(0, Math.sin(Math.PI * (1 - p.jumpT / this.jumpSec))) * this.jumpHeight : 0;
+      const z = p.jump.z;
       all.push({
         id: p.id, k: p.role === 'opp' ? 'opp' : p.npc ? 'npc' : 'bro', x: +p.x.toFixed(2), y: +p.y.toFixed(2), n: p.name,
         l: p.light ? 1 : undefined, st: t < p.stunUntil ? 1 : undefined, rv: p.npc && p.rv > 0 ? +p.rv.toFixed(2) : undefined,
         c: p.hue, z: z > 0 ? +z.toFixed(2) : undefined, lit: p.light && !p.npc,
+        gk: p.kicks || undefined, gv: p.vest || undefined, sh: t < p.shieldUntil ? 1 : undefined,
       });
     }
     for (const ai of this.ais) {

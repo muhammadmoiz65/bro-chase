@@ -99,7 +99,7 @@ export const CASH = {
 };
 
 export type ItemId = 'trap' | 'drink' | 'decoy' | 'bribe';
-export type ShopId = ItemId | 'armor' | 'autorepair' | 'aura';
+export type ShopId = ItemId | 'armor' | 'autorepair' | 'aura' | 'kicks' | 'vest';
 
 export const DOOR_LEVEL_HP = [100, 160, 230, 320];
 
@@ -111,6 +111,27 @@ export const SHOP: Record<ShopId, { name: string; price: number | number[]; desc
   decoy: { name: 'Decoy speaker', price: 70, desc: 'Drop it (3). Blasts noise for 7s to lure them away.' },
   bribe: { name: 'Bribe', price: 150, desc: 'Use it (4). Opps ignore you for 8s.' },
   aura: { name: 'Aura pack', price: 40, desc: '+40 aura right now.' },
+  kicks: { name: 'Drip kicks', price: [90, 180, 320], desc: 'Shoes: jump again in mid-air and run faster (3 tiers).' },
+  vest: { name: 'Body armour', price: [110, 210, 340], desc: 'Blocks Opp grabs: 1, 2, then 3 per night (3 tiers).' },
+};
+
+/** Player gear tiers. Index 0 = none. Gear stays with you between nights while you stay in the room. */
+export const GEAR = {
+  kicks: [
+    { name: 'No kicks', speed: 1, airJumps: 0 },
+    { name: 'Fresh Kicks', speed: 1.1, airJumps: 1 },
+    { name: 'Turbo Kicks', speed: 1.2, airJumps: 1 },
+    { name: 'Sky Kicks', speed: 1.3, airJumps: 2 },
+  ],
+  vest: [
+    { name: 'No armour', shields: 0 },
+    { name: 'Hoodie Vest', shields: 1 },
+    { name: 'Steel Plate', shields: 2 },
+    { name: 'Gold Sigma Suit', shields: 3 },
+  ],
+  maxTier: 3,
+  shieldStunSec: 1.4, // the Opp who hit your armour is knocked back this long
+  shieldSafeSec: 1.5, // can't be grabbed again right after the armour blocks a grab
 };
 
 export const ITEM = {

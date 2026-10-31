@@ -19,6 +19,9 @@ export interface EntView {
   rv?: number; // revive progress 0..1 for NPCs
   c?: number; // colour hue 0..359
   z?: number; // jump height
+  gk?: number; // kicks tier 1..3
+  gv?: number; // body armour tier 1..3
+  sh?: 1; // armour just blocked a grab (flash)
 }
 
 export interface SelfView {
@@ -34,6 +37,9 @@ export interface SelfView {
   bribe: number; // seconds left
   defLv: Record<DefKind, number>; // 1..3 per type
   defCount: number;
+  kicks: number; // shoes tier 0..3
+  vest: number; // body armour tier 0..3
+  shields: number; // grabs the armour can still block tonight
 }
 
 export interface DefView { id: number; k: DefKind; x: number; y: number; hp: number; lv: number; own?: 1; tx?: number; ty?: number; off?: 1 }
