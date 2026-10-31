@@ -16,6 +16,7 @@ import {
 } from '../shared/world.ts';
 import { findPath } from './path.ts';
 import { airborne as isAirborne, freshJump, kicksSpeed, stepJump, tryJump, type JumpState } from '../shared/gear.ts';
+import { encodeLook, lookFromId, parseLook, type Look } from '../shared/look.ts';
 
 const DT = 1 / TICK_RATE;
 
@@ -53,6 +54,7 @@ interface Player {
   repairing: boolean;
   rv: number;
   hue: number;
+  look: string; // encoded Look
   cash: number;
   inv: Record<ItemId, number>;
   drinkUntil: number;
@@ -201,14 +203,15 @@ export class Room {
     return {
       id, name, role, ws, leftAt: 0, x: 0, y: 0, npc: false, light: false, aura: AURA.start,
       input: { dx: 0, dy: 0, zoom: false, sneak: false }, jump: freshJump(), kicks: 0, vest: 0, shields: 0, shieldUntil: 0, crib: -1, stunUntil: 0, stunFrom: [0, 0],
-      repairing: false, rv: 0, hue: hueOf(id), cash: CASH.start, inv: { trap: 0, drink: 0, decoy: 0, bribe: 0 },
+      repairing: false, rv: 0, hue: hueOf(id), look: encodeLook(lookFromId(id)), cash: CASH.start, inv: { trap: 0, drink: 0, decoy: 0, bribe: 0 },
       drinkUntil: 0, bribeUntil: 0, cashT: 0, stats: freshStats(), ping: 0, stepT: 0,
       repairNoiseT: 0, smashCd: 0, chatTimes: [], bot: false, wantOpp: false, screechCd: 0, lungeCd: 0, lungeT: 0,
       botT: 0, botGoal: null, botPath: [], botReplan: 0,
     };
   }
 
-  join(accountId: string, name: string, ws: WebSocket, wantRole: Role): void {
+  join(accountId: string, name: string, ws: WebSocket, wantRole: Role, look?: Look | null): void {
+    const lk = encodeLook(look ?? lookFromId(accountId));
     let p = this.players.get(accountId);
     let notice: string | undefined;
     if (p) {
@@ -220,6 +223,7 @@ export class Room {
       p.ws = ws;
       p.leftAt = 0;
       p.name = name;
+      p.look = lk;
     } else {
       let role: Role = 'bro';
       let queued = false;
@@ -234,6 +238,7 @@ export class Room {
       }
       p = this.newPlayer(accountId, name, ws, role);
       p.wantOpp = queued;
+      p.look = lk;
       this.players.set(accountId, p);
       this.ensureRoom();
       // mid-night joiners get the nearest free crib; otherwise walk into any free crib to claim it
@@ -412,6 +417,11 @@ export class Room {
         if (this.phase === 'lobby' && p.id === this.hostId) this.setPhase('pregame');
         break;
       case 'role': this.switchRole(p, msg.role); break;
+      case 'look': {
+        const l = parseLook(msg.look);
+        if (l) p.look = encodeLook(l);
+        break;
+      }
       case 'pong':
         if (typeof msg.at === 'number') p.ping = Math.max(0, Math.round(Date.now() - msg.at));
         break;
@@ -1431,7 +1441,7 @@ export class Room {
       all.push({
         id: p.id, k: p.role === 'opp' ? 'opp' : p.npc ? 'npc' : 'bro', x: +p.x.toFixed(2), y: +p.y.toFixed(2), n: p.name,
         l: p.light ? 1 : undefined, st: t < p.stunUntil ? 1 : undefined, rv: p.npc && p.rv > 0 ? +p.rv.toFixed(2) : undefined,
-        c: p.hue, z: z > 0 ? +z.toFixed(2) : undefined, lit: p.light && !p.npc, ai: p.bot ? 1 : undefined,
+        c: p.hue, lk: p.role === 'opp' ? undefined : p.look, z: z > 0 ? +z.toFixed(2) : undefined, lit: p.light && !p.npc, ai: p.bot ? 1 : undefined,
         gk: p.kicks || undefined, gv: p.vest || undefined, sh: t < p.shieldUntil ? 1 : undefined,
       });
     }

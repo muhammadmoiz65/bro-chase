@@ -234,3 +234,27 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 #hud.opp #touch-buttons button[data-act="light"], #hud.opp #touch-buttons button[data-act="repair"], #hud.opp #touch-buttons button[data-act="walk"],
 #hud.opp #touch-buttons button[data-act="shop"], #hud.opp #touch-buttons button[data-act="item1"], #hud.opp #touch-buttons button[data-act="zoom"] { display: none; }
 #queued { color: var(--gold); font-size: 12px; font-weight: 800; margin-bottom: 4px; }
+
+/* ===== Character creator ===== */
+#creator { z-index: 60; background: rgba(5, 6, 10, 0.78); }
+.creator-card { width: min(820px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,.6); max-height: calc(100vh - 32px); overflow-y: auto; }
+.creator-title { margin: 0 0 10px; font-family: Bungee, Inter, sans-serif; color: var(--gold); letter-spacing: 1px; }
+.creator-body { display: grid; grid-template-columns: minmax(220px, 1fr) 1.3fr; gap: 16px; }
+#creator-preview { min-height: 340px; border-radius: 14px; background: radial-gradient(circle at 50% 35%, #3a2e55, #12131c 70%); cursor: grab; touch-action: none; overflow: hidden; }
+#creator-preview:active { cursor: grabbing; }
+#creator-controls { display: flex; flex-direction: column; gap: 8px; }
+.cr-row { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 8px; }
+.cr-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.cr-pick { display: flex; align-items: center; gap: 8px; }
+.cr-pick span { flex: 1; text-align: center; font-weight: 700; }
+.cr-pick button { width: 36px; padding: 6px 0; font-size: 18px; line-height: 1; }
+.cr-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.cr-swatch { width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid rgba(255,255,255,.15); }
+.cr-swatch.on { border-color: #fff; box-shadow: 0 0 0 2px var(--pink); }
+.creator-actions { justify-content: flex-end; margin-top: 6px; }
+.look-row { justify-content: space-between; margin: 4px 0 0; }
+@media (max-width: 640px) {
+  .creator-body { grid-template-columns: 1fr; }
+  #creator-preview { min-height: 220px; }
+  .cr-row { grid-template-columns: 74px 1fr; }
+}

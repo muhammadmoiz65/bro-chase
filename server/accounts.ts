@@ -5,6 +5,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import { encodeLook, parseLook, type Look } from '../shared/look.ts';
 import { dirname } from 'node:path';
 
 export interface Account {
@@ -13,6 +14,7 @@ export interface Account {
   username: string | null;
   hasPassword: boolean;
   createdAt: number;
+  look: Look | null; // null until the player opens the character creator
   stats: { nights: number; wins: number; catches: number; mogs: number; revives: number };
 }
 
@@ -22,6 +24,7 @@ interface AccountRow {
   username: string | null;
   pass_hash: string | null;
   created_at: number;
+  look: string | null;
   nights: number;
   wins: number;
   catches: number;
@@ -97,6 +100,8 @@ export class Accounts {
       );
       CREATE INDEX IF NOT EXISTS devices_account ON devices(account_id);
     `);
+    const cols = this.db.prepare('PRAGMA table_info(accounts)').all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'look')) this.db.exec('ALTER TABLE accounts ADD COLUMN look TEXT');
   }
 
   private toAccount(r: AccountRow): Account {
@@ -106,6 +111,7 @@ export class Accounts {
       username: r.username,
       hasPassword: !!r.pass_hash,
       createdAt: r.created_at,
+      look: r.look ? parseLook(r.look) : null,
       stats: { nights: r.nights, wins: r.wins, catches: r.catches, mogs: r.mogs, revives: r.revives },
     };
   }
@@ -146,6 +152,13 @@ export class Accounts {
     const name = cleanName(raw);
     if (!name) throw new AccountError(400, 'Name must be 2 to 16 letters or numbers.');
     this.db.prepare('UPDATE accounts SET name = ? WHERE id = ?').run(name, id);
+    return this.toAccount(this.row(id)!);
+  }
+
+  setLook(id: string, raw: unknown): Account {
+    const look = parseLook(raw);
+    if (!look) throw new AccountError(400, 'That look is not valid.');
+    this.db.prepare('UPDATE accounts SET look = ? WHERE id = ?').run(encodeLook(look), id);
     return this.toAccount(this.row(id)!);
   }
 

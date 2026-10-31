@@ -1,6 +1,8 @@
 import './style.css';
 import { api, getToken, loadTurnstile, setToken, solvePow, type Account } from './api.ts';
 import { Renderer } from './render.ts';
+import { Creator } from './creator.ts';
+import { encodeLook, type Look } from '../../shared/look.ts';
 import { Hud } from './hud.ts';
 import { Input, type Action } from './input.ts';
 import { ambient, chant, sfx } from './audio.ts';
@@ -29,6 +31,7 @@ announcer.onCallout = (tier, color) => {
   if (tier >= 2) renderer.fx.flash(parseInt(color.slice(1), 16), 0.12 + tier * 0.04, 3);
   if (tier >= 3 && game) renderer.fx.particles.burst(tier >= 5 ? 'confetti' : 'sparkle', game.me.x, 1.2, game.me.y, { scale: 1 + tier * 0.15 });
 };
+const creator = new Creator();
 
 // ======================================================================
 // Game session
@@ -523,10 +526,25 @@ function enterMain(a: Account) {
   renderAccount();
   void refreshLobbies();
   const join = new URLSearchParams(location.search).get('join');
-  if (join) {
-    history.replaceState(null, '', location.pathname);
-    startGame({ mode: 'join', code: join, role: role() });
-  }
+  if (join) history.replaceState(null, '', location.pathname);
+  const go = () => { if (join) startGame({ mode: 'join', code: join, role: role() }); };
+  if (!a.look) openCreator(true, go);
+  else go();
+}
+
+/** Open the character creator; saves to the account and, if in a game, updates your bro live. */
+function openCreator(firstTime = false, after?: () => void) {
+  const wasEnabled = input.enabled;
+  input.enabled = false;
+  creator.open(account?.look ?? null, {
+    firstTime,
+    onSave: async (look: Look) => {
+      const r = await api.setLook(look);
+      account = r.account;
+      game?.send({ t: 'look', look: encodeLook(look) });
+    },
+    onClose: () => { input.enabled = wasEnabled || !!game; after?.(); },
+  });
 }
 
 async function runCaptcha() {
@@ -656,6 +674,8 @@ hud.onUpgrade = (kind) => game?.send({ t: 'upgrade', kind });
 $('btn-start').onclick = () => game?.send({ t: 'start' });
 $('btn-role-bro').onclick = () => game?.send({ t: 'role', role: 'bro' });
 $('btn-role-six').onclick = () => game?.send({ t: 'role', role: 'opp' });
+$('btn-look').onclick = () => openCreator();
+$('btn-customize').onclick = () => openCreator();
 $('btn-copy').onclick = async () => {
   const code = game?.lobby?.code;
   if (!code) return;
