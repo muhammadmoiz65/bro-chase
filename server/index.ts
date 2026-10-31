@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { WebSocketServer } from 'ws';
 import { Accounts, AccountError, cleanName } from './accounts.ts';
 import { Rooms } from './rooms.ts';
+import { Captcha } from './captcha.ts';
 import { PHASE_SEC } from '../shared/constants.ts';
 import type { ClientMsg, Role } from '../shared/protocol.ts';
 
@@ -17,10 +18,12 @@ export interface StartOptions {
   port?: number;
   dbFile?: string;
   phaseSec?: typeof PHASE_SEC;
+  powBits?: number;
 }
 
 export function startServer(opts: StartOptions = {}): Promise<{ server: Server; port: number; close: () => void }> {
   const accounts = new Accounts(opts.dbFile ?? process.env.DB_FILE ?? join(root, 'data', 'bro-chase.db'));
+  const captcha = new Captcha({ bits: opts.powBits });
   const rooms = new Rooms((id, s) => accounts.addStats(id, s), opts.phaseSec);
   const app = express();
   app.disable('x-powered-by');
@@ -35,9 +38,9 @@ export function startServer(opts: StartOptions = {}): Promise<{ server: Server; 
     if (!acc) res.status(401).json({ error: 'Not signed in on this device.' });
     return acc;
   };
-  const wrap = (fn: (req: express.Request, res: express.Response) => void) => (req: express.Request, res: express.Response) => {
+  const wrap = (fn: (req: express.Request, res: express.Response) => void | Promise<void>) => async (req: express.Request, res: express.Response) => {
     try {
-      fn(req, res);
+      await fn(req, res);
     } catch (e) {
       if (e instanceof AccountError) res.status(e.status).json({ error: e.message });
       else { console.error(e); res.status(500).json({ error: 'Something broke on our side.' }); }
@@ -54,7 +57,12 @@ export function startServer(opts: StartOptions = {}): Promise<{ server: Server; 
     return list.length > 10;
   };
 
-  app.post('/api/guest', wrap((req, res) => {
+  app.get('/api/captcha', (_req, res) => { res.json(captcha.issue()); });
+  app.post('/api/guest', wrap(async (req, res) => {
+    if (!(await captcha.verify(req.body?.captcha, req.ip))) {
+      res.status(400).json({ error: 'Captcha failed. Prove you are not an NPC and try again.' });
+      return;
+    }
     const { token, account } = accounts.createGuest(req.body?.name);
     res.json({ token, account });
   }));

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { WebSocket } from 'ws';
 import { Room } from '../server/game.ts';
 import { startServer } from '../server/index.ts';
+import { solvePow } from '../server/captcha.ts';
 import { doorCenter, cellAt, move } from '../shared/world.ts';
 import type { ServerMsg } from '../shared/protocol.ts';
 
@@ -225,7 +226,7 @@ test('scoreboard lists players and AI Sixsevens', () => {
 // ---------- full server over HTTP + WebSocket ----------
 
 test('guest account, password, login on a new device, and joining over WebSocket', async () => {
-  const srv = await startServer({ port: 0, dbFile: ':memory:', phaseSec: fast });
+  const srv = await startServer({ port: 0, dbFile: ':memory:', phaseSec: fast, powBits: 10 });
   const base = `http://localhost:${srv.port}`;
   try {
     const post = (path: string, body: unknown, token?: string) =>
@@ -234,7 +235,15 @@ test('guest account, password, login on a new device, and joining over WebSocket
         headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(body),
       });
-    const guest = await (await post('/api/guest', {})).json();
+    const solved = async () => {
+      const c = await (await fetch(base + '/api/captcha')).json();
+      assert.equal(c.kind, 'pow');
+      return { challenge: c.challenge, nonce: solvePow(c.challenge, c.bits) };
+    };
+    assert.equal((await post('/api/guest', {})).status, 400, 'no captcha, no account');
+    const answer = await solved();
+    const guest = await (await post('/api/guest', { captcha: answer })).json();
+    assert.equal((await post('/api/guest', { captcha: answer })).status, 400, 'a solved challenge is single-use');
     assert.ok(guest.token);
     assert.equal(guest.account.hasPassword, false);
 
@@ -254,7 +263,7 @@ test('guest account, password, login on a new device, and joining over WebSocket
     const lobbies = await (await fetch(base + '/api/lobbies')).json();
     assert.ok(!lobbies.lobbies.some((l: any) => l.code === welcome.room), 'private lobby is not listed');
 
-    const g2 = await (await post('/api/guest', { name: 'Unc' })).json();
+    const g2 = await (await post('/api/guest', { name: 'Unc', captcha: await solved() })).json();
     const ws2 = new WebSocket(`ws://localhost:${srv.port}/ws?token=${g2.token}&mode=join&code=${welcome.room}`);
     const snap: any = await new Promise((res) => ws2.on('message', (d) => { const m = JSON.parse(String(d)); if (m.t === 'snap') res(m); }));
     assert.equal(snap.lobby.code, welcome.room);
