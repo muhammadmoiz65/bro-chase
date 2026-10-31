@@ -6,6 +6,8 @@ import { DOOR_LEVEL_HP, PLOT, RING_LIGHT_RANGE } from '../../shared/constants.ts
 import { applyGear, makeDefence, makeDoor, tickUpgrades } from './upgrades.ts';
 import { cellAt, doorCenter, plotCenter, type CribView } from '../../shared/world.ts';
 import type { DefView, DropView, EntView, PropView, WorldEvents } from '../../shared/protocol.ts';
+import { DEFAULT_LOOK, parseLook } from '../../shared/look.ts';
+import { buildAvatar, type Avatar } from './avatar.ts';
 
 const CAM_OFFSET = new THREE.Vector3(0, 15, 10.5);
 const RING_POOL = 8;
@@ -73,6 +75,8 @@ interface BroMesh {
   reviveRing: THREE.Mesh;
   kind: string;
   name: string;
+  look: string;
+  avatar: Avatar;
 }
 
 interface OppMesh {
@@ -417,30 +421,37 @@ export class Renderer {
     return g;
   }
 
+  /** Put kicks/armour on a custom avatar: shoes ride the leg pivots, a helmet hides hat and hair. */
+  private dressGear(avatar: Avatar, kicks: number, vest: number) {
+    const ud = avatar.group.userData as { kickFeet?: THREE.Object3D[] };
+    for (const f of ud.kickFeet ?? []) f.removeFromParent();
+    const gear = applyGear(avatar.group, kicks, vest, avatar.measure);
+    ud.kickFeet = [];
+    if (kicks > 0) {
+      const feet = [...gear.children[0].children]; // left first
+      feet.forEach((f, i) => {
+        const leg = i === 0 ? avatar.legL : avatar.legR;
+        f.position.set(0, f.position.y - leg.position.y, f.position.z);
+        leg.add(f);
+        ud.kickFeet!.push(f);
+      });
+    }
+    avatar.setHeadwearVisible(!gear.userData.helmet);
+  }
+
   private makeBro(e: EntView): BroMesh {
     const group = new THREE.Group();
-    const color = new THREE.Color().setHSL((e.c ?? 200) / 360, 0.65, 0.55);
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.45, 4, 10), new THREE.MeshStandardMaterial({ color, roughness: 0.5 }));
-    body.position.y = 0.55;
-    body.castShadow = true;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 10), new THREE.MeshStandardMaterial({ color: 0xffd7b0 }));
-    head.position.y = 1.08;
-    head.castShadow = true;
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-    for (const dx of [-0.08, 0.08]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 6), eyeMat);
-      eye.position.set(dx, 1.12, 0.19);
-      group.add(eye);
-    }
+    const avatar = buildAvatar(parseLook(e.lk) ?? DEFAULT_LOOK);
+    const body = avatar.body;
     // the ring light: a glowing halo over the head
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(0.26, 0.045, 8, 24),
       new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff1d6, emissiveIntensity: 0 }),
     );
     ring.rotation.x = Math.PI / 2;
-    ring.position.y = 1.45;
+    ring.position.y = 1.62;
     const label = textSprite(e.n, '#ffffff', 34);
-    label.position.y = 1.9;
+    label.position.y = 2.0;
     const reviveRing = new THREE.Mesh(
       new THREE.RingGeometry(0.5, 0.6, 32, 1, 0, 0.01),
       new THREE.MeshBasicMaterial({ color: 0x4ade80, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }),
@@ -448,10 +459,10 @@ export class Renderer {
     reviveRing.rotation.x = -Math.PI / 2;
     reviveRing.position.y = 0.05;
     reviveRing.visible = false;
-    group.add(body, head, ring, label, reviveRing);
-    applyGear(group, e.gk ?? 0, e.gv ?? 0);
+    group.add(avatar.group, ring, label, reviveRing);
+    this.dressGear(avatar, e.gk ?? 0, e.gv ?? 0);
     this.scene.add(group);
-    return { group, body, ring, label, reviveRing, kind: e.k, name: e.n };
+    return { group, body, ring, label, reviveRing, kind: e.k, name: e.n, look: e.lk ?? '', avatar };
   }
 
   private makeOpp(e: EntView): OppMesh {
@@ -759,8 +770,8 @@ export class Renderer {
       }
       seenBros.add(e.id);
       let m = this.bros.get(e.id);
-      if (!m || m.name !== e.n) {
-        if (m) m.group.removeFromParent();
+      if (!m || m.name !== e.n || m.look !== (e.lk ?? '')) {
+        if (m) { m.group.removeFromParent(); m.avatar.dispose(); }
         m = this.makeBro(e);
         this.bros.set(e.id, m);
       }
@@ -770,13 +781,15 @@ export class Renderer {
       m.group.position.set(e.x, (e.z ?? 0) + bob, e.y);
       const mv = new THREE.Vector3(e.x - prev.x, 0, e.y - prev.z);
       if (mv.lengthSq() > 1e-5) m.group.rotation.y = Math.atan2(mv.x, mv.z);
-      if (m.group.userData.gearKey !== `${e.gk ?? 0}:${e.gv ?? 0}`) applyGear(m.group, e.gk ?? 0, e.gv ?? 0);
-      const gear = m.group.userData.gear as THREE.Group;
+      if (m.avatar.group.userData.gearKey !== `${e.gk ?? 0}:${e.gv ?? 0}`) this.dressGear(m.avatar, e.gk ?? 0, e.gv ?? 0);
+      const gear = m.avatar.group.userData.gear as THREE.Group;
       (gear.userData.setShield as (on: boolean, t: number) => void)(!!e.sh && !npc, t);
-      const bm = m.body.material as THREE.MeshStandardMaterial;
-      bm.transparent = npc;
-      bm.opacity = npc ? 0.35 : 1;
-      m.group.children.forEach((c) => { if (c !== m!.label && c !== m!.reviveRing) c.visible = !npc || c === m!.body; });
+      gear.visible = !npc;
+      for (const f of (m.avatar.group.userData.kickFeet as THREE.Object3D[])) f.visible = !npc;
+      m.avatar.setGhost(npc);
+      const ud = m.avatar.group.userData as { spd?: number };
+      ud.spd = (ud.spd ?? 0) * 0.85 + (mv.length() / Math.max(dt, 1e-3)) * 0.15;
+      m.avatar.animate(t / 1000, npc ? 0 : Math.min(1, ud.spd / 4));
       const rm = m.ring.material as THREE.MeshStandardMaterial;
       rm.emissiveIntensity = e.l ? 3 : 0;
       m.ring.visible = !npc;
@@ -788,7 +801,7 @@ export class Renderer {
       if (e.l && !npc) lit.push({ x: e.x, y: e.y, z: e.z ?? 0 });
       if (e.id === selfId) m.label.visible = false;
     }
-    for (const [id, m] of this.bros) if (!seenBros.has(id)) { m.group.removeFromParent(); this.bros.delete(id); }
+    for (const [id, m] of this.bros) if (!seenBros.has(id)) { m.group.removeFromParent(); m.avatar.dispose(); this.bros.delete(id); }
     for (const [id, m] of this.opps) if (!seenOpps.has(id)) { m.group.removeFromParent(); this.opps.delete(id); }
 
     // ring light pool: nearest lit bros get a real light

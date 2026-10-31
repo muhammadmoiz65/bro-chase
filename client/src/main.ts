@@ -1,6 +1,8 @@
 import './style.css';
 import { api, getToken, loadTurnstile, setToken, solvePow, type Account } from './api.ts';
 import { Renderer } from './render.ts';
+import { Creator } from './creator.ts';
+import { encodeLook, type Look } from '../../shared/look.ts';
 import { Hud } from './hud.ts';
 import { Input, type Action } from './input.ts';
 import { chant, sfx } from './audio.ts';
@@ -22,6 +24,7 @@ let game: Game | null = null;
 const renderer = new Renderer($('game'));
 const hud = new Hud();
 const input = new Input();
+const creator = new Creator();
 
 // ======================================================================
 // Game session
@@ -498,10 +501,25 @@ function enterMain(a: Account) {
   renderAccount();
   void refreshLobbies();
   const join = new URLSearchParams(location.search).get('join');
-  if (join) {
-    history.replaceState(null, '', location.pathname);
-    startGame({ mode: 'join', code: join, role: role() });
-  }
+  if (join) history.replaceState(null, '', location.pathname);
+  const go = () => { if (join) startGame({ mode: 'join', code: join, role: role() }); };
+  if (!a.look) openCreator(true, go);
+  else go();
+}
+
+/** Open the character creator; saves to the account and, if in a game, updates your bro live. */
+function openCreator(firstTime = false, after?: () => void) {
+  const wasEnabled = input.enabled;
+  input.enabled = false;
+  creator.open(account?.look ?? null, {
+    firstTime,
+    onSave: async (look: Look) => {
+      const r = await api.setLook(look);
+      account = r.account;
+      game?.send({ t: 'look', look: encodeLook(look) });
+    },
+    onClose: () => { input.enabled = wasEnabled || !!game; after?.(); },
+  });
 }
 
 async function runCaptcha() {
@@ -631,6 +649,8 @@ hud.onUpgrade = (kind) => game?.send({ t: 'upgrade', kind });
 $('btn-start').onclick = () => game?.send({ t: 'start' });
 $('btn-role-bro').onclick = () => game?.send({ t: 'role', role: 'bro' });
 $('btn-role-six').onclick = () => game?.send({ t: 'role', role: 'opp' });
+$('btn-look').onclick = () => openCreator();
+$('btn-customize').onclick = () => openCreator();
 $('btn-copy').onclick = async () => {
   const code = game?.lobby?.code;
   if (!code) return;
