@@ -6,6 +6,10 @@
 import * as THREE from 'three';
 import { PLOT } from '../../../shared/constants.ts';
 import { plotCenter } from '../../../shared/world.ts';
+import { buildTown } from './town.ts';
+import { cribContactShadows, groundOcclusion } from './ao.ts';
+
+let generation = 0;
 
 type Paint = (ctx: CanvasRenderingContext2D, s: number) => void;
 
@@ -177,27 +181,36 @@ export function dressWorld(group: THREE.Group, R: number, renderer: THREE.WebGLR
   const plots = (2 * R + 1) ** 2;
   const prep = (t: THREE.Texture, rep: number) => { t.repeat.set(rep, rep); t.anisotropy = aniso; return t; };
 
-  // countryside grass beyond the map, then asphalt over the whole map
-  const outer = span + 60;
-  const field = new THREE.Mesh(flatPlane(outer, outer, -0.01), new THREE.MeshStandardMaterial({ map: prep(grassTex(), outer / 5), roughness: 1 }));
+  // countryside grass beyond the map, a ring road around it, then asphalt over the whole map
+  const outer = span + 110;
+  const field = new THREE.Mesh(flatPlane(outer, outer, -0.03), new THREE.MeshStandardMaterial({ map: prep(grassTex(), outer / 5), roughness: 1 }));
   field.position.set(mid, 0, mid);
   field.receiveShadow = true;
   const road = new THREE.Mesh(flatPlane(span, span, 0), new THREE.MeshStandardMaterial({ map: prep(asphaltTex(), span / 5), roughness: 0.92 }));
   road.position.set(mid, 0, mid);
   road.receiveShadow = true;
-  group.add(field, road);
+  const ringW = span + 10;
+  const ring = new THREE.Mesh(flatPlane(ringW, ringW, -0.01), new THREE.MeshStandardMaterial({ map: prep(asphaltTex(), ringW / 5), roughness: 0.92 }));
+  ring.position.set(mid, 0, mid);
+  ring.receiveShadow = true;
+  const kerbW = span + 13;
+  const kerb = new THREE.Mesh(flatPlane(kerbW, kerbW, -0.02), new THREE.MeshStandardMaterial({ map: prep(concreteTex(), kerbW / 2), roughness: 0.85 }));
+  kerb.position.set(mid, 0, mid);
+  kerb.receiveShadow = true;
+  group.add(field, kerb, ring, road);
 
   const centres: Array<[number, number]> = [];
   for (let i = 0; i < plots; i++) centres.push(plotCenter(i));
   // plot centre cells are offsets in tiles; cell (x, y) covers [x, x + 1), so the plot's true centre is at +0 (crib spans [c-4, c+4))
   const yards = centres.slice(1);
-  const walk = new THREE.MeshStandardMaterial({ map: prep(concreteTex(), 12 / 2), roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
-  group.add(instanced(flatPlane(12, 12, 0.004), walk, centres.slice(1)));
-  const lawn = new THREE.MeshStandardMaterial({ map: prep(grassTex(), 10 / 4), roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-  group.add(instanced(flatPlane(10, 10, 0.006), lawn, yards));
+  const walk = new THREE.MeshStandardMaterial({ map: prep(concreteTex(), 12 / 2), roughness: 0.85 });
+  group.add(instanced(flatPlane(12, 12, 0.006), walk, centres.slice(1)));
+  const lawn = new THREE.MeshStandardMaterial({ map: prep(grassTex(), 10 / 4), roughness: 1 });
+  group.add(instanced(flatPlane(10, 10, 0.014), lawn, yards));
+  group.add(cribContactShadows(yards));
   // the plaza is paved
   const [px, pz] = centres[0];
-  const plaza = new THREE.Mesh(flatPlane(12, 12, 0.006), new THREE.MeshStandardMaterial({ map: prep(paverTex(), 3), roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+  const plaza = new THREE.Mesh(flatPlane(12, 12, 0.014), new THREE.MeshStandardMaterial({ map: prep(paverTex(), 3), roughness: 0.8 }));
   plaza.position.set(px, 0, pz);
   plaza.receiveShadow = true;
   group.add(plaza);
@@ -211,11 +224,18 @@ export function dressWorld(group: THREE.Group, R: number, renderer: THREE.WebGLR
       // skip intersections so lines don't cross
       const rel = ((t - lo) % PLOT + PLOT) % PLOT;
       if (rel < 1.5 || rel > PLOT - 1.5) continue;
-      tmp.position.set(line, 0.008, t + 0.5); tmp.rotation.set(0, 0, 0); tmp.updateMatrix(); dashes.push(tmp.matrix.clone());
-      tmp.position.set(t + 0.5, 0.008, line); tmp.rotation.set(0, Math.PI / 2, 0); tmp.updateMatrix(); dashes.push(tmp.matrix.clone());
+      tmp.position.set(line, 0.01, t + 0.5); tmp.rotation.set(0, 0, 0); tmp.updateMatrix(); dashes.push(tmp.matrix.clone());
+      tmp.position.set(t + 0.5, 0.01, line); tmp.rotation.set(0, Math.PI / 2, 0); tmp.updateMatrix(); dashes.push(tmp.matrix.clone());
     }
   }
-  const dashMesh = new THREE.InstancedMesh(flatPlane(0.1, 0.9, 0), new THREE.MeshStandardMaterial({ color: 0xf2d16b, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), Math.max(1, dashes.length));
+  // the ring road's centre line
+  const rr = span / 2 + 2.5;
+  for (let t = -rr + 1; t < rr - 1; t += 2) {
+    for (const [x, z, rot] of [[mid + t + 0.5, mid - rr, Math.PI / 2], [mid + t + 0.5, mid + rr, Math.PI / 2], [mid - rr, mid + t + 0.5, 0], [mid + rr, mid + t + 0.5, 0]] as Array<[number, number, number]>) {
+      tmp.position.set(x, 0.002, z); tmp.rotation.set(0, rot, 0); tmp.updateMatrix(); dashes.push(tmp.matrix.clone());
+    }
+  }
+  const dashMesh = new THREE.InstancedMesh(flatPlane(0.1, 0.9, 0), new THREE.MeshStandardMaterial({ color: 0xf2d16b, roughness: 0.6 }), Math.max(1, dashes.length));
   dashMesh.count = dashes.length;
   dashes.forEach((m, i) => dashMesh.setMatrixAt(i, m));
   dashMesh.receiveShadow = true;
@@ -228,7 +248,7 @@ export function dressWorld(group: THREE.Group, R: number, renderer: THREE.WebGLR
   }
   // a ring of trees beyond the boundary wall
   const treeSpots: Array<[number, number, number]> = [];
-  const inner = span / 2 + 2.5;
+  const inner = span / 2 + 30;
   for (let ring = 0; ring < 3; ring++) {
     const d = inner + ring * 3.2;
     const count = Math.floor((d * 8) / 2.6);
@@ -243,12 +263,14 @@ export function dressWorld(group: THREE.Group, R: number, renderer: THREE.WebGLR
     }
   }
   addTrees(group, treeSpots, bushSpots);
+  const gen = ++generation;
+  void buildTown(group, R, () => gen === generation && group.parent !== null).catch((e) => console.warn('town models failed to load', e));
 }
 
 function addTrees(group: THREE.Group, trees: Array<[number, number, number]>, bushes: Array<[number, number, number]>) {
   const trunkGeo = new THREE.CylinderGeometry(0.12, 0.18, 1.4, 6);
   trunkGeo.translate(0, 0.7, 0);
-  const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.95 }), Math.max(1, trees.length));
+  const trunks = new THREE.InstancedMesh(trunkGeo, groundOcclusion(new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.95 })), Math.max(1, trees.length));
   // lumpy low-poly canopy
   const blob = (r: number, detail: number) => {
     const g = new THREE.IcosahedronGeometry(r, detail);
@@ -260,7 +282,7 @@ function addTrees(group: THREE.Group, trees: Array<[number, number, number]>, bu
     g.computeVertexNormals();
     return g;
   };
-  const leaf = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true });
+  const leaf = groundOcclusion(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true }), 0.35, 0.6);
   const canopy = new THREE.InstancedMesh(blob(1, 1), leaf, Math.max(1, trees.length * 2));
   const bush = new THREE.InstancedMesh(blob(1, 1), leaf, Math.max(1, bushes.length));
   const tmp = new THREE.Object3D();
