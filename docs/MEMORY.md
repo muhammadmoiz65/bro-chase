@@ -19,7 +19,7 @@
   **Replaced** by Babylon.js (next entry).
 - 2026-10-31: **Switch the client engine to Babylon.js.** Moiz said "I think we need to change our game engine", saw the side-by-side
   test (`proto/engines/`, [ENGINE-TEST.md](ENGINE-TEST.md)) and chose Babylon.js on the decision card, over the recommendation to stay
-  on Three.js. Still 2.5D, still a browser game, server and `shared/` unchanged. Shipped as one PR (#9), because two engines
+  on Three.js. Still 2.5D, still a browser game, server and `shared/` unchanged. Shipped as one PR (#10, after the test in #9), because two engines
   can't share one screen, so a half-moved client wouldn't run. Three.js is gone from the game; it stays only as a dev dependency
   for the engine test in `proto/engines/`. Don't add Three.js code to the game.
 - 2026-10-31: **Brain-rot theme** (memes like 67, aura, mog, rizz, Ohio).
