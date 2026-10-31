@@ -3,7 +3,8 @@ import { api, getToken, loadTurnstile, setToken, solvePow, type Account } from '
 import { Renderer } from './render.ts';
 import { Hud } from './hud.ts';
 import { Input, type Action } from './input.ts';
-import { chant, sfx } from './audio.ts';
+import { ambient, chant, sfx } from './audio.ts';
+import { Announcer } from './fx/announcer.ts';
 import { EVENTS, ITEM, JUMP, SPEED } from '../../shared/constants.ts';
 import {
   cellAt, cribAtPos, dist, doorBlocks, doorCenter, move, overFence, type CribView, type DoorSide,
@@ -21,6 +22,12 @@ let game: Game | null = null;
 const renderer = new Renderer($('game'));
 const hud = new Hud();
 const input = new Input();
+const announcer = new Announcer();
+announcer.onCallout = (tier, color) => {
+  renderer.fx.shake(0.1 + tier * 0.08);
+  if (tier >= 2) renderer.fx.flash(parseInt(color.slice(1), 16), 0.12 + tier * 0.04, 3);
+  if (tier >= 3 && game) renderer.fx.particles.burst(tier >= 5 ? 'confetti' : 'sparkle', game.me.x, 1.2, game.me.y, { scale: 1 + tier * 0.15 });
+};
 
 // ======================================================================
 // Game session
@@ -102,8 +109,15 @@ class Game {
       case 'feed':
         hud.feed(m.items);
         for (const it of m.items) {
-          if (it.k === 'caught') { if (it.b === hud.myName) sfx.caught(); }
-          else if (it.k === 'mog') sfx.mog();
+          announcer.feed(it.k, it.a, it.b, hud.myName);
+          if (it.k === 'caught') {
+            if (it.b === hud.myName) {
+              sfx.caught();
+              renderer.fx.shake(1);
+              renderer.fx.freeze(0.12);
+              renderer.fx.flash(0xff1a3c, 0.6, 1.5);
+            }
+          } else if (it.k === 'mog') { sfx.mog(); renderer.fx.flash(0xfff1d6, 0.25, 5); }
           else if (it.k === 'revive') sfx.revive();
           else if (it.k === 'event') sfx.event();
         }
@@ -117,11 +131,14 @@ class Game {
       case 'scores': hud.scores(m.rows, this.selfId, this.lobby?.name ?? ''); break;
       case 'result':
         hud.result(m.win, m.mvp);
+        if ((m.win && this.role === 'bro') || (!m.win && this.role === 'opp')) {
+          for (let i = 0; i < 3; i++) setTimeout(() => renderer.fx.particles.burst('confetti', this.me.x + (Math.random() - 0.5) * 2, 0.5, this.me.y + (Math.random() - 0.5) * 2), i * 250);
+        }
         if ((m.win && this.role === 'bro') || (!m.win && this.role === 'opp')) sfx.win(); else sfx.lose();
         break;
       case 'cash':
         if (m.d) hud.auraPop(m.d, m.why, true);
-        if (m.d > 0) sfx.auraUp();
+        if (m.d > 0) { sfx.cash(); renderer.fx.particles.burst('cash', this.me.x, 1, this.me.y, { scale: 0.7 }); }
         break;
       case 'aura':
         hud.auraPop(m.d, m.why);
@@ -137,9 +154,13 @@ class Game {
     this.snaps.push({ recv: performance.now(), ents });
     if (this.snaps.length > 30) this.snaps.shift();
     const prevPhase = this.phase;
+    if (m.phase === 'lockin' && prevPhase !== 'lockin') announcer.reset();
     this.phase = m.phase;
     this.phaseEnd = m.phaseEnd;
     this.night = m.night;
+    if (this.ev.power !== m.ev.power && this.me.init) {
+      if (m.ev.power) sfx.powerUp(); else { sfx.powerDown(); renderer.fx.shake(0.15); }
+    }
     this.ev = m.ev;
     this.lobby = m.lobby;
     this.counts = m.counts;
@@ -157,14 +178,17 @@ class Game {
     }
     if (m.drops) renderer.setDrops(m.drops);
     for (const n of m.noises) {
-      if (!renderer.addNoise(n.id, n.x, n.y, n.r)) continue;
+      if (!renderer.addNoise(n.id, n.x, n.y, n.r, n.k)) continue;
       // hear what's near you: footsteps, pets, smashing
       const d = dist(n.x, n.y, this.me.x, this.me.y);
       if (d > 14) continue;
       const vol = Math.max(0.15, 1 - d / 14);
-      if (n.k === 'step' || n.k === 'zoom' || n.k === 'land') sfx.step(vol * (n.k === 'zoom' ? 1.6 : 1));
-      else if (n.k === 'smash') sfx.knock();
-      else if (n.k === 'bass') sfx.bass();
+      const pan = Math.max(-1, Math.min(1, (n.x - this.me.x) / 8));
+      if (n.k === 'step' || n.k === 'zoom') sfx.step(vol * (n.k === 'zoom' ? 1.6 : 1), pan);
+      else if (n.k === 'land') sfx.land(vol);
+      else if (n.k === 'smash') { sfx.smash(pan); renderer.fx.shake(0.5 * vol); }
+      else if (n.k === 'door') sfx.door(pan);
+      else if (n.k === 'bass') { sfx.bass(pan); renderer.fx.shake(0.25 * vol); }
     }
 
     const self = ents.get(this.selfId);
@@ -356,6 +380,7 @@ class Game {
       }
     }
     renderer.frame(ents, this.selfId, this.me, this.ev, this.role === 'opp');
+    ambient(this.ev.power, this.role === 'bro' && !this.npc ? renderer.danger : 0);
     hud.timer(this.phase, this.phaseEnd, this.night, this.counts);
     hud.hint(this.hintText());
     hud.tickKnock();
@@ -575,7 +600,7 @@ $('btn-logout').onclick = async () => {
 $('btn-leave').onclick = () => { game?.leave(); showMenu(); };
 $('btn-shop').onclick = () => hud.toggleShop();
 $('shop-close').onclick = () => hud.toggleShop(false);
-hud.onBuy = (item) => game?.send({ t: 'buy', item });
+hud.onBuy = (item) => { sfx.buy(); game?.send({ t: 'buy', item }); };
 hud.onBuild = (kind) => { game?.send({ t: 'build', kind }); hud.toggleShop(false); };
 hud.onUpgrade = (kind) => game?.send({ t: 'upgrade', kind });
 $('btn-start').onclick = () => game?.send({ t: 'start' });
