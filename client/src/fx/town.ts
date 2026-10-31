@@ -4,16 +4,18 @@
 // outside the boundary wall. The south side (towards the camera) keeps tall
 // models far back so they never block the view of players.
 
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PLOT } from '../../../shared/constants.ts';
-import { groundOcclusion } from './ao.ts';
+import { castShadows, context, groundOcclusion, instances, scene, useScene, type Inst, type Node } from '../bjs/kit.ts';
+import type { AssetContainer } from '@babylonjs/core/assetContainer';
+import { Mesh } from '@babylonjs/core/Meshes/mesh';
+import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial';
 
-const loader = new GLTFLoader();
-const cache = new Map<string, Promise<THREE.Group>>();
+const cache = new Map<string, Promise<AssetContainer>>();
+// the glTF loader is split into its own chunk: the game can start before it arrives
+const loader = () => Promise.all([import('@babylonjs/core/Loading/sceneLoader'), import('@babylonjs/loaders/glTF/2.0')]).then(([m]) => m.LoadAssetContainerAsync);
 const load = (url: string) => {
   let p = cache.get(url);
-  if (!p) { p = loader.loadAsync(url).then((g) => g.scene); cache.set(url, p); }
+  if (!p) { const sc = scene(); p = loader().then((fn) => fn(url, sc)); cache.set(url, p); }
   return p;
 };
 
@@ -27,25 +29,44 @@ const rand = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 214
 
 interface Place { model: string; x: number; z: number; rot: number; scale: number }
 
-/** The first mesh in a Kenney model (city kit models are a single mesh). */
-function firstMesh(root: THREE.Object3D): THREE.Mesh | null {
-  let found: THREE.Mesh | null = null;
-  root.traverse((o) => { if (!found && (o as THREE.Mesh).isMesh) found = o as THREE.Mesh; });
-  return found;
-}
-
-function prepMaterial(m: THREE.Material | THREE.Material[]) {
-  for (const mm of Array.isArray(m) ? m : [m]) {
-    const s = mm as THREE.MeshStandardMaterial;
-    if (s.map) { s.map.anisotropy = 4; s.map.colorSpace = THREE.SRGBColorSpace; }
-    s.roughness = 0.8;
-    s.metalness = 0;
-    groundOcclusion(s, 0.4, 1.2);
+const prepped = new WeakSet<AssetContainer>();
+function prep(c: AssetContainer) {
+  if (prepped.has(c)) return;
+  prepped.add(c);
+  for (const t of c.textures) scene().addTexture(t);
+  for (const m of c.materials) {
+    scene().addMaterial(m);
+    if (!(m instanceof PBRMaterial)) continue;
+    m.roughness = 0.8;
+    m.metallic = 0;
+    m.maxSimultaneousLights = 8;
+    if (m.albedoTexture) m.albedoTexture.anisotropicFilteringLevel = 4;
+    groundOcclusion(m, 0.4, 1.2);
   }
 }
 
-/** Build the town for ring radius R into `group`. `alive()` returns false once the world was rebuilt. */
-export async function buildTown(group: THREE.Group, R: number, alive: () => boolean) {
+/** A copy of every mesh in a model, flattened into world space, as instancing templates. */
+function templates(c: AssetContainer, parent: Node): Mesh[] {
+  const out: Mesh[] = [];
+  for (const src of c.meshes) {
+    if (!(src instanceof Mesh) || !src.getTotalVertices()) continue;
+    const m = src.clone(src.name + '-tpl', null, true, false)!;
+    m.makeGeometryUnique();
+    m.parent = null;
+    src.computeWorldMatrix(true);
+    m.bakeTransformIntoVertices(src.getWorldMatrix());
+    m.position.setAll(0);
+    m.rotationQuaternion = null;
+    m.rotation.setAll(0);
+    m.scaling.setAll(1);
+    m.parent = parent;
+    out.push(m);
+  }
+  return out;
+}
+
+/** Build the town for ring radius R under `parent`. `alive()` returns false once the world was rebuilt. */
+export async function buildTown(parent: Node, R: number, alive: () => boolean) {
   seed = 4242;
   const half = ((2 * R + 1) * PLOT) / 2;
   const places: Place[] = [];
@@ -73,47 +94,39 @@ export async function buildTown(group: THREE.Group, R: number, alive: () => bool
     const d = half + 5 + S / 2 + (sz > 0 ? 8 : 0);
     places.push({ model: 'grass-trees-tall', x: sx * (half + 5 + S / 2), z: sz * d, rot: 0, scale: S });
   }
-
-  // instanced per model
-  const byModel = new Map<string, Place[]>();
-  for (const p of places) { if (!byModel.has(p.model)) byModel.set(p.model, []); byModel.get(p.model)!.push(p); }
-  const tmp = new THREE.Object3D();
-  await Promise.all([...byModel].map(async ([model, list]) => {
-    const scene = await load(`/models/city/${model}.glb`);
-    if (!alive()) return;
-    const mesh = firstMesh(scene);
-    if (!mesh) return;
-    prepMaterial(mesh.material);
-    mesh.updateWorldMatrix(true, false);
-    const local = mesh.matrixWorld.clone();
-    const im = new THREE.InstancedMesh(mesh.geometry, mesh.material, list.length);
-    list.forEach((p, i) => {
-      tmp.position.set(p.x, 0, p.z);
-      tmp.rotation.set(0, p.rot, 0);
-      tmp.scale.setScalar(p.scale);
-      tmp.updateMatrix();
-      im.setMatrixAt(i, tmp.matrix.clone().multiply(local));
-    });
-    im.castShadow = true;
-    im.receiveShadow = true;
-    group.add(im);
-  }));
-
   // parked trucks along the outer road, nose to tail at the kerb
-  const trucks = await Promise.all(TRUCKS.map((c) => load(`/models/cars/vehicle-truck-${c}.glb`)));
-  if (!alive()) return;
-  trucks.forEach((t) => t.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { prepMaterial(m.material); m.castShadow = true; m.receiveShadow = true; } }));
+  const trucks: Place[] = [];
   const kerb = half + 3.6;
   for (let side = 0; side < 4; side++) {
     for (let t = -half + 4; t < half - 4; t += 7) {
       if (rand() < 0.45) continue;
-      const truck = trucks[Math.floor(rand() * trucks.length)].clone();
+      const colour = TRUCKS[Math.floor(rand() * TRUCKS.length)];
       const along = side === 0 || side === 2;
       const [x, z] = side === 0 ? [t, -kerb] : side === 1 ? [kerb, t] : side === 2 ? [-t, kerb] : [-kerb, -t];
-      truck.position.set(x, 0, z);
-      truck.rotation.y = (along ? Math.PI / 2 : 0) + (rand() < 0.5 ? Math.PI : 0);
-      truck.scale.setScalar(0.95);
-      group.add(truck);
+      trucks.push({ model: colour, x, z, rot: (along ? Math.PI / 2 : 0) + (rand() < 0.5 ? Math.PI : 0), scale: 0.95 });
     }
   }
+
+  const group = (list: Place[]) => {
+    const by = new Map<string, Place[]>();
+    for (const p of list) { if (!by.has(p.model)) by.set(p.model, []); by.get(p.model)!.push(p); }
+    return by;
+  };
+  const ctx = context();
+  const place = async (url: string, list: Place[]) => {
+    const c = await load(url);
+    if (!alive()) return;
+    useScene(ctx.scene, ctx.shadows); // another scene (the creator preview) may have been current meanwhile
+    prep(c);
+    const inst: Inst[] = list.map((p) => ({ x: p.x, z: p.z, ry: p.rot, s: p.scale }));
+    for (const t of templates(c, parent)) {
+      instances(t, inst);
+      t.receiveShadows = true;
+      castShadows(t);
+    }
+  };
+  await Promise.all([
+    ...[...group(places)].map(([model, list]) => place(`/models/city/${model}.glb`, list)),
+    ...[...group(trucks)].map(([colour, list]) => place(`/models/cars/vehicle-truck-${colour}.glb`, list)),
+  ]);
 }

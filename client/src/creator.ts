@@ -2,7 +2,15 @@
 // pickers for skin, hair, outfit, hat and accessory. Opens before your first game
 // and from the menu or the pre-game lobby panel.
 
-import * as THREE from 'three';
+import { Engine } from '@babylonjs/core/Engines/engine';
+import { Scene } from '@babylonjs/core/scene';
+import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera';
+import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
+import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight';
+import { Color4 } from '@babylonjs/core/Maths/math.color';
+import { Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration';
+import { context, cyl, group, srgb, std, useScene, type Node } from './bjs/kit.ts';
 import {
   ACCESSORIES, DEFAULT_LOOK, HAIR_COLORS, HAIR_STYLES, HATS, OUTFIT_COLORS, SKIN_NAMES, SKIN_TONES, TOPS,
   randomLook, type Look,
@@ -30,11 +38,13 @@ export class Creator {
   private controls: HTMLElement;
   private status: HTMLElement;
   private look: Look = { ...DEFAULT_LOOK };
-  private renderer: THREE.WebGLRenderer | null = null;
-  private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
+  private engine: Engine | null = null;
+  private scene: Scene | null = null;
+  private camera: FreeCamera | null = null;
   private avatar: Avatar | null = null;
-  private turntable = new THREE.Group();
+  private turntable: Node | null = null;
+  private lastW = 0;
+  private lastH = 0;
   private raf = 0;
   private spin = 0.5;
   private drag: { x: number; rot: number } | null = null;
@@ -51,29 +61,12 @@ export class Creator {
     document.getElementById('creator-save')!.onclick = () => void this.save();
     document.getElementById('creator-cancel')!.onclick = () => this.close();
 
-    this.camera.position.set(0, 1.25, 3.3);
-    this.camera.lookAt(0, 0.8, 0);
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x6a6080, 1.6));
-    const key = new THREE.DirectionalLight(0xffffff, 2.2);
-    key.position.set(2, 4, 3);
-    this.scene.add(key);
-    const rim = new THREE.DirectionalLight(0xff6aa0, 1.2);
-    rim.position.set(-3, 2, -2);
-    this.scene.add(rim);
-    const disc = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.7, 0.75, 0.06, 40),
-      new THREE.MeshStandardMaterial({ color: 0x2a2c3a, roughness: 0.6 }),
-    );
-    disc.position.y = -0.03;
-    this.turntable.add(disc);
-    this.scene.add(this.turntable);
-
     this.canvasBox.addEventListener('pointerdown', (e) => {
-      this.drag = { x: e.clientX, rot: this.turntable.rotation.y };
+      this.drag = { x: e.clientX, rot: this.turntable?.rotation.y ?? 0 };
       this.canvasBox.setPointerCapture(e.pointerId);
     });
     this.canvasBox.addEventListener('pointermove', (e) => {
-      if (this.drag) this.turntable.rotation.y = this.drag.rot + (e.clientX - this.drag.x) * 0.012;
+      if (this.drag && this.turntable) this.turntable.rotation.y = this.drag.rot + (e.clientX - this.drag.x) * 0.012;
     });
     const end = () => { this.drag = null; };
     this.canvasBox.addEventListener('pointerup', end);
@@ -93,13 +86,8 @@ export class Creator {
     this.status.textContent = '';
     this.root.classList.remove('hidden');
     this.isOpen = true;
-    if (!this.renderer) {
-      try {
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
-        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-        this.canvasBox.appendChild(this.renderer.domElement);
-      } catch { this.renderer = null; }
+    if (!this.engine) {
+      try { this.setup(); } catch { this.engine = null; }
     }
     this.refresh();
     cancelAnimationFrame(this.raf);
@@ -135,27 +123,66 @@ export class Creator {
     }
   }
 
+  /** A small Babylon scene of its own (its own canvas), so it works over the menu and in the lobby. */
+  private setup() {
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'width:100%;height:100%;display:block;outline:none';
+    this.canvasBox.appendChild(canvas);
+    const engine = new Engine(canvas, true, { alpha: true, premultipliedAlpha: false }, true);
+    const scene = new Scene(engine);
+    scene.useRightHandedSystem = true;
+    scene.clearColor = new Color4(0, 0, 0, 0);
+    scene.imageProcessingConfiguration.toneMappingEnabled = true;
+    scene.imageProcessingConfiguration.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
+    const camera = new FreeCamera('creator-cam', new Vector3(0, 1.25, 3.3), scene);
+    camera.fov = (32 * Math.PI) / 180;
+    camera.minZ = 0.1;
+    camera.setTarget(new Vector3(0, 0.8, 0));
+    camera.inputs.clear();
+    const hemi = new HemisphericLight('h', new Vector3(0, 1, 0), scene);
+    hemi.diffuse = srgb(0xffffff);
+    hemi.groundColor = srgb(0x6a6080);
+    hemi.intensity = 1.6;
+    const key = new DirectionalLight('key', new Vector3(-2, -4, -3).normalize(), scene);
+    key.intensity = 2.2;
+    const rim = new DirectionalLight('rim', new Vector3(3, -2, 2).normalize(), scene);
+    rim.diffuse = srgb(0xff6aa0);
+    rim.intensity = 1.2;
+    const prev = this.saveContext();
+    useScene(scene, null);
+    this.turntable = group(null, 'turntable');
+    const disc = cyl(0.7, 0.75, 0.06, std(0x2a2c3a, { roughness: 0.6 }), { seg: 40 });
+    disc.position.y = -0.03;
+    disc.parent = this.turntable;
+    this.restoreContext(prev);
+    this.engine = engine;
+    this.scene = scene;
+    this.camera = camera;
+  }
+
+  private saveContext() { try { return context(); } catch { return null; } }
+  private restoreContext(c: ReturnType<typeof context> | null) { if (c) useScene(c.scene, c.shadows); }
+
   private frame(time: number) {
-    if (!this.renderer) return;
+    if (!this.engine || !this.scene) return;
     const w = this.canvasBox.clientWidth, h = this.canvasBox.clientHeight;
-    const c = this.renderer.domElement;
-    if (c.width !== Math.floor(w * this.renderer.getPixelRatio()) || c.height !== Math.floor(h * this.renderer.getPixelRatio())) {
-      this.renderer.setSize(w, h, false);
-      c.style.width = `${w}px`;
-      c.style.height = `${h}px`;
-      this.camera.aspect = w / Math.max(1, h);
-      this.camera.updateProjectionMatrix();
-    }
-    if (!this.drag) this.turntable.rotation.y += this.spin / 60;
+    if (w !== this.lastW || h !== this.lastH) { this.lastW = w; this.lastH = h; this.engine.resize(); }
+    if (!this.drag && this.turntable) this.turntable.rotation.y += this.spin / 60;
     this.avatar?.animate(time, 0);
     if (this.avatar) this.avatar.group.position.y = Math.abs(Math.sin(time * 2.2)) * 0.03;
-    this.renderer.render(this.scene, this.camera);
+    this.scene.render();
   }
 
   private refresh() {
-    if (this.avatar) { this.avatar.group.removeFromParent(); this.avatar.dispose(); }
-    this.avatar = buildAvatar(this.look);
-    this.turntable.add(this.avatar.group);
+    this.avatar?.dispose();
+    this.avatar = null;
+    if (this.scene && this.turntable) {
+      const prev = this.saveContext();
+      useScene(this.scene, null);
+      this.avatar = buildAvatar(this.look);
+      this.avatar.group.parent = this.turntable;
+      this.restoreContext(prev);
+    }
     this.buildControls();
   }
 

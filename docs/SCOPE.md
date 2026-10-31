@@ -65,7 +65,7 @@ Random short modes interrupt the night for 10 to 20 seconds each: power cut, fog
 
 | Layer | Choice |
 | --- | --- |
-| Client | Babylon.js + TypeScript, built with Vite (`client/`). Moving from Three.js (decided 2026-10-31) |
+| Client | Babylon.js + TypeScript, built with Vite (`client/`). Switched from Three.js on 2026-10-31 |
 | Server | Node.js 22.13+, Express + `ws` WebSockets, authoritative simulation at 20 ticks/s (`server/`) |
 | Shared rules | `shared/` (constants, protocol, world, gear, look) used by client and server |
 | Data | SQLite via built-in `node:sqlite` (`data/bro-chase.db`) |

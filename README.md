@@ -2,7 +2,7 @@
 
 Survive the night. Don't get caught.
 
-A brain-rot themed, online co-op survival horror game in the browser (2.5D, Three.js). Every bro gets a
+A brain-rot themed, online co-op survival horror game in the browser (2.5D, Babylon.js). Every bro gets a
 crib with a front and a back door, locked by default. Opps are blind and hunt by sound. When one
 smashes in, run out the other door to a friend's crib and knock: they decide whether to let you in.
 

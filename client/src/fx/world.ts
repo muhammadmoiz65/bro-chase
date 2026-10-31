@@ -3,26 +3,21 @@
 // and a ring of trees beyond the map edge. All instanced, so it costs only a
 // handful of draw calls. Purely visual: none of this changes collision.
 
-import * as THREE from 'three';
 import { PLOT } from '../../../shared/constants.ts';
 import { plotCenter } from '../../../shared/world.ts';
 import { buildTown } from './town.ts';
-import { cribContactShadows, groundOcclusion } from './ao.ts';
+import { cribContactShadows } from './ao.ts';
+import {
+  box, canvasTexture, cyl, groundOcclusion, groundPlane, ico, instances, receiveShadows, castShadows, std, type Inst, type Mesh, type Node,
+} from '../bjs/kit.ts';
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
+import { VertexBuffer } from '@babylonjs/core/Buffers/buffer';
+import type { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture';
 
 let generation = 0;
 
 type Paint = (ctx: CanvasRenderingContext2D, s: number) => void;
-
-function canvasTex(size: number, paint: Paint, repeat = true): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const ctx = c.getContext('2d')!;
-  paint(ctx, size);
-  const t = new THREE.CanvasTexture(c);
-  if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
+const tex = (size: number, paint: Paint) => canvasTexture(size, size, (ctx) => paint(ctx, size), true);
 
 // deterministic random so every client sees the same trees and textures
 let seed = 1337;
@@ -40,12 +35,11 @@ function speckle(ctx: CanvasRenderingContext2D, s: number, colors: string[], n: 
   ctx.globalAlpha = 1;
 }
 
-const grassTex = () => canvasTex(256, (ctx, s) => {
+const grassTex = () => tex(256, (ctx, s) => {
   ctx.fillStyle = '#5e9a3e';
   ctx.fillRect(0, 0, s, s);
   speckle(ctx, s, ['#4b8331', '#6fae4a', '#3f7428', '#86bf5a'], 260, 6, 22, 0.35); // patches
-  // blades: short strokes
-  for (let i = 0; i < 2600; i++) {
+  for (let i = 0; i < 2600; i++) { // blades: short strokes
     const x = rand() * s, y = rand() * s;
     ctx.strokeStyle = ['#7cbc52', '#4a8a30', '#93cc62', '#3d6f27'][Math.floor(rand() * 4)];
     ctx.globalAlpha = 0.25 + rand() * 0.45;
@@ -58,7 +52,7 @@ const grassTex = () => canvasTex(256, (ctx, s) => {
   ctx.globalAlpha = 1;
 });
 
-const asphaltTex = () => canvasTex(256, (ctx, s) => {
+const asphaltTex = () => tex(256, (ctx, s) => {
   ctx.fillStyle = '#44474f';
   ctx.fillRect(0, 0, s, s);
   speckle(ctx, s, ['#383a41', '#53565e', '#2f3137'], 160, 8, 30, 0.25);
@@ -67,8 +61,7 @@ const asphaltTex = () => canvasTex(256, (ctx, s) => {
     ctx.globalAlpha = rand() * 0.6;
     ctx.fillRect(rand() * s, rand() * s, 1 + rand(), 1 + rand());
   }
-  // a couple of hairline cracks
-  ctx.globalAlpha = 0.35;
+  ctx.globalAlpha = 0.35; // a couple of hairline cracks
   ctx.strokeStyle = '#1f2024';
   for (let i = 0; i < 3; i++) {
     let x = rand() * s, y = rand() * s;
@@ -80,7 +73,7 @@ const asphaltTex = () => canvasTex(256, (ctx, s) => {
   ctx.globalAlpha = 1;
 });
 
-const concreteTex = () => canvasTex(256, (ctx, s) => {
+const concreteTex = () => tex(256, (ctx, s) => {
   ctx.fillStyle = '#c4c0b6';
   ctx.fillRect(0, 0, s, s);
   speckle(ctx, s, ['#b3afa5', '#d2cec5', '#a9a59b'], 220, 4, 18, 0.3);
@@ -94,7 +87,7 @@ const concreteTex = () => canvasTex(256, (ctx, s) => {
   ctx.globalAlpha = 1;
 });
 
-const paverTex = () => canvasTex(256, (ctx, s) => {
+const paverTex = () => tex(256, (ctx, s) => {
   ctx.fillStyle = '#8c6f5a';
   ctx.fillRect(0, 0, s, s);
   const b = s / 8;
@@ -110,7 +103,7 @@ const paverTex = () => canvasTex(256, (ctx, s) => {
   speckle(ctx, s, ['#5c4636', '#e0c2a8'], 200, 1, 3, 0.4);
 });
 
-export const brickTexture = () => canvasTex(256, (ctx, s) => {
+export const brickTexture = () => tex(256, (ctx, s) => {
   ctx.fillStyle = '#d9d6d0'; // mortar
   ctx.fillRect(0, 0, s, s);
   const rows = 8, bw = s / 4, bh = s / rows;
@@ -126,45 +119,28 @@ export const brickTexture = () => canvasTex(256, (ctx, s) => {
   speckle(ctx, s, ['#ffffff', '#b8b4ad'], 300, 1, 3, 0.35);
 });
 
-/** Darker capstones along the top of every wall instance (reads the wall InstancedMesh). */
-export function addWallCaps(group: THREE.Group, walls: THREE.InstancedMesh) {
-  const n = walls.count;
-  if (!n) return;
-  const cap = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(1.08, 0.12, 1.08),
-    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 }),
-    n,
-  );
-  const m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
-  const tmp = new THREE.Object3D();
-  const col = new THREE.Color();
-  for (let i = 0; i < n; i++) {
-    walls.getMatrixAt(i, m);
-    m.decompose(p, q, sc);
-    tmp.position.set(p.x, p.y + sc.y / 2 + 0.05, p.z);
-    tmp.updateMatrix();
-    cap.setMatrixAt(i, tmp.matrix);
-    if (walls.instanceColor) { walls.getColorAt(i, col); col.multiplyScalar(0.62); } else col.setHex(0x9a958c);
-    cap.setColorAt(i, col);
-  }
-  cap.castShadow = true;
-  cap.receiveShadow = true;
-  group.add(cap);
-}
+const rep = (t: DynamicTexture, n: number) => { t.uScale = n; t.vScale = n; t.anisotropicFilteringLevel = 8; return t; };
 
-function flatPlane(w: number, h: number, y: number): THREE.PlaneGeometry {
-  const g = new THREE.PlaneGeometry(w, h);
-  g.rotateX(-Math.PI / 2);
-  g.translate(0, y, 0);
-  return g;
+/** Darker capstones along the top of every wall (one entry per wall instance). */
+export function addWallCaps(parent: Node, walls: Inst[]) {
+  if (!walls.length) return;
+  const cap = box(1.08, 0.12, 1.08, std(0xffffff, { roughness: 0.7 }));
+  cap.parent = parent;
+  instances(cap, walls.map((w) => {
+    const h = Array.isArray(w.s) ? w.s[1] : 1;
+    return { x: w.x, z: w.z, y: (w.y ?? 0) + h / 2 + 0.05, color: w.color !== undefined ? mulHex(w.color, 0.62) : 0x9a958c };
+  }), { colors: true });
+  castShadows(cap);
+  cap.receiveShadows = true;
 }
+const mulHex = (hex: number, k: number) => ((Math.round(((hex >> 16) & 255) * k) << 16) | (Math.round(((hex >> 8) & 255) * k) << 8) | Math.round((hex & 255) * k));
 
-function instanced(geo: THREE.BufferGeometry, mat: THREE.Material, spots: Array<[number, number]>): THREE.InstancedMesh {
-  const m = new THREE.InstancedMesh(geo, mat, Math.max(1, spots.length));
-  m.count = spots.length;
-  const tmp = new THREE.Object3D();
-  spots.forEach(([x, z], i) => { tmp.position.set(x, 0, z); tmp.updateMatrix(); m.setMatrixAt(i, tmp.matrix); });
-  m.receiveShadow = true;
+function flat(w: number, h: number, mat: Parameters<typeof groundPlane>[2], y: number, parent: Node, x = 0, z = 0): Mesh {
+  const m = groundPlane(w, h, mat, y);
+  m.position.x = x;
+  m.position.z = z;
+  m.parent = parent;
+  m.receiveShadows = true;
   return m;
 }
 
@@ -172,74 +148,50 @@ function instanced(geo: THREE.BufferGeometry, mat: THREE.Material, spots: Array<
  * Ground layers and scenery for a world of ring radius R.
  * Plot layout (tiles from the plot centre): crib walls [-4, 4), yard [-5, 5), sidewalk [-6, 6), road outside that.
  */
-export function dressWorld(group: THREE.Group, R: number, renderer: THREE.WebGLRenderer) {
+export function dressWorld(parent: Node, R: number) {
   seed = 1337;
-  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   const lo = -(R * PLOT + PLOT / 2);
   const span = (2 * R + 1) * PLOT;
   const mid = lo + span / 2;
   const plots = (2 * R + 1) ** 2;
-  const prep = (t: THREE.Texture, rep: number) => { t.repeat.set(rep, rep); t.anisotropy = aniso; return t; };
 
   // countryside grass beyond the map, a ring road around it, then asphalt over the whole map
   const outer = span + 110;
-  const field = new THREE.Mesh(flatPlane(outer, outer, -0.03), new THREE.MeshStandardMaterial({ map: prep(grassTex(), outer / 5), roughness: 1 }));
-  field.position.set(mid, 0, mid);
-  field.receiveShadow = true;
-  const road = new THREE.Mesh(flatPlane(span, span, 0), new THREE.MeshStandardMaterial({ map: prep(asphaltTex(), span / 5), roughness: 0.92 }));
-  road.position.set(mid, 0, mid);
-  road.receiveShadow = true;
-  const ringW = span + 10;
-  const ring = new THREE.Mesh(flatPlane(ringW, ringW, -0.01), new THREE.MeshStandardMaterial({ map: prep(asphaltTex(), ringW / 5), roughness: 0.92 }));
-  ring.position.set(mid, 0, mid);
-  ring.receiveShadow = true;
+  flat(outer, outer, std(0xffffff, { roughness: 1, map: rep(grassTex(), outer / 5) }), -0.03, parent, mid, mid);
   const kerbW = span + 13;
-  const kerb = new THREE.Mesh(flatPlane(kerbW, kerbW, -0.02), new THREE.MeshStandardMaterial({ map: prep(concreteTex(), kerbW / 2), roughness: 0.85 }));
-  kerb.position.set(mid, 0, mid);
-  kerb.receiveShadow = true;
-  group.add(field, kerb, ring, road);
+  flat(kerbW, kerbW, std(0xffffff, { roughness: 0.85, map: rep(concreteTex(), kerbW / 2) }), -0.02, parent, mid, mid);
+  const ringW = span + 10;
+  flat(ringW, ringW, std(0xffffff, { roughness: 0.92, map: rep(asphaltTex(), ringW / 5) }), -0.01, parent, mid, mid);
+  flat(span, span, std(0xffffff, { roughness: 0.92, map: rep(asphaltTex(), span / 5) }), 0, parent, mid, mid);
 
   const centres: Array<[number, number]> = [];
   for (let i = 0; i < plots; i++) centres.push(plotCenter(i));
-  // plot centre cells are offsets in tiles; cell (x, y) covers [x, x + 1), so the plot's true centre is at +0 (crib spans [c-4, c+4))
   const yards = centres.slice(1);
-  const walk = new THREE.MeshStandardMaterial({ map: prep(concreteTex(), 12 / 2), roughness: 0.85 });
-  group.add(instanced(flatPlane(12, 12, 0.006), walk, centres.slice(1)));
-  const lawn = new THREE.MeshStandardMaterial({ map: prep(grassTex(), 10 / 4), roughness: 1 });
-  group.add(instanced(flatPlane(10, 10, 0.014), lawn, yards));
-  group.add(cribContactShadows(yards));
+  const at = (list: Array<[number, number]>) => list.map(([x, z]) => ({ x, z }));
+  instances(flat(12, 12, std(0xffffff, { roughness: 0.85, map: rep(concreteTex(), 6) }), 0.006, parent), at(yards));
+  instances(flat(10, 10, std(0xffffff, { roughness: 1, map: rep(grassTex(), 10 / 4) }), 0.014, parent), at(yards));
+  cribContactShadows(yards).parent = parent;
   // the plaza is paved
   const [px, pz] = centres[0];
-  const plaza = new THREE.Mesh(flatPlane(12, 12, 0.014), new THREE.MeshStandardMaterial({ map: prep(paverTex(), 3), roughness: 0.8 }));
-  plaza.position.set(px, 0, pz);
-  plaza.receiveShadow = true;
-  group.add(plaza);
+  flat(12, 12, std(0xffffff, { roughness: 0.8, map: rep(paverTex(), 3) }), 0.014, parent, px, pz);
 
   // dashed centre lines on every road between plots
-  const dashes: THREE.Matrix4[] = [];
-  const tmp = new THREE.Object3D();
+  const dashes: Inst[] = [];
   for (let k = 1; k < 2 * R + 1; k++) {
-    const line = lo + k * PLOT;
+    const ln = lo + k * PLOT;
     for (let t = lo + 1; t < lo + span - 1; t += 2) {
-      // skip intersections so lines don't cross
-      const rel = ((t - lo) % PLOT + PLOT) % PLOT;
+      const rel = ((t - lo) % PLOT + PLOT) % PLOT; // skip intersections so lines don't cross
       if (rel < 1.5 || rel > PLOT - 1.5) continue;
-      tmp.position.set(line, 0.01, t + 0.5); tmp.rotation.set(0, 0, 0); tmp.updateMatrix(); dashes.push(tmp.matrix.clone());
-      tmp.position.set(t + 0.5, 0.01, line); tmp.rotation.set(0, Math.PI / 2, 0); tmp.updateMatrix(); dashes.push(tmp.matrix.clone());
+      dashes.push({ x: ln, y: 0.01, z: t + 0.5 }, { x: t + 0.5, y: 0.01, z: ln, ry: Math.PI / 2 });
     }
   }
-  // the ring road's centre line
-  const rr = span / 2 + 2.5;
+  const rr = span / 2 + 2.5; // the ring road's centre line
   for (let t = -rr + 1; t < rr - 1; t += 2) {
-    for (const [x, z, rot] of [[mid + t + 0.5, mid - rr, Math.PI / 2], [mid + t + 0.5, mid + rr, Math.PI / 2], [mid - rr, mid + t + 0.5, 0], [mid + rr, mid + t + 0.5, 0]] as Array<[number, number, number]>) {
-      tmp.position.set(x, 0.002, z); tmp.rotation.set(0, rot, 0); tmp.updateMatrix(); dashes.push(tmp.matrix.clone());
-    }
+    dashes.push(
+      { x: mid + t + 0.5, y: 0.002, z: mid - rr, ry: Math.PI / 2 }, { x: mid + t + 0.5, y: 0.002, z: mid + rr, ry: Math.PI / 2 },
+      { x: mid - rr, y: 0.002, z: mid + t + 0.5 }, { x: mid + rr, y: 0.002, z: mid + t + 0.5 });
   }
-  const dashMesh = new THREE.InstancedMesh(flatPlane(0.1, 0.9, 0), new THREE.MeshStandardMaterial({ color: 0xf2d16b, roughness: 0.6 }), Math.max(1, dashes.length));
-  dashMesh.count = dashes.length;
-  dashes.forEach((m, i) => dashMesh.setMatrixAt(i, m));
-  dashMesh.receiveShadow = true;
-  group.add(dashMesh);
+  instances(flat(0.1, 0.9, std(0xf2d16b, { roughness: 0.6 }), 0, parent), dashes);
 
   // bushes hugging the outside corners of every crib
   const bushSpots: Array<[number, number, number]> = [];
@@ -253,62 +205,58 @@ export function dressWorld(group: THREE.Group, R: number, renderer: THREE.WebGLR
     const d = inner + ring * 3.2;
     const count = Math.floor((d * 8) / 2.6);
     for (let i = 0; i < count; i++) {
-      // walk the square perimeter at distance d
-      const u = (i / count) * 8 - 4; // -4..4 around 4 sides
-      const side = Math.floor((u + 4) / 2), f = ((u + 4) % 2) - 1; // f in [-1, 1)
+      const u = (i / count) * 8 - 4; // walk the square perimeter at distance d
+      const side = Math.floor((u + 4) / 2), f = ((u + 4) % 2) - 1;
       let x = 0, z = 0;
       if (side === 0) { x = f * d; z = -d; } else if (side === 1) { x = d; z = f * d; } else if (side === 2) { x = -f * d; z = d; } else { x = -d; z = -f * d; }
       x += (rand() - 0.5) * 2; z += (rand() - 0.5) * 2;
       treeSpots.push([mid + x, mid + z, 0.85 + rand() * 0.6]);
     }
   }
-  addTrees(group, treeSpots, bushSpots);
+  addTrees(parent, treeSpots, bushSpots);
   const gen = ++generation;
-  void buildTown(group, R, () => gen === generation && group.parent !== null).catch((e) => console.warn('town models failed to load', e));
+  void buildTown(parent, R, () => gen === generation && !parent.isDisposed()).catch((e) => console.warn('town models failed to load', e));
 }
 
-function addTrees(group: THREE.Group, trees: Array<[number, number, number]>, bushes: Array<[number, number, number]>) {
-  const trunkGeo = new THREE.CylinderGeometry(0.12, 0.18, 1.4, 6);
-  trunkGeo.translate(0, 0.7, 0);
-  const trunks = new THREE.InstancedMesh(trunkGeo, groundOcclusion(new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.95 })), Math.max(1, trees.length));
-  // lumpy low-poly canopy
-  const blob = (r: number, detail: number) => {
-    const g = new THREE.IcosahedronGeometry(r, detail);
-    const pos = g.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      const k = 1 + (Math.sin(pos.getX(i) * 7.1) + Math.cos(pos.getZ(i) * 6.3) + Math.sin(pos.getY(i) * 5.7)) * 0.05;
-      pos.setXYZ(i, pos.getX(i) * k, pos.getY(i) * k * 0.9, pos.getZ(i) * k);
-    }
-    g.computeVertexNormals();
-    return g;
-  };
-  const leaf = groundOcclusion(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true }), 0.35, 0.6);
-  const canopy = new THREE.InstancedMesh(blob(1, 1), leaf, Math.max(1, trees.length * 2));
-  const bush = new THREE.InstancedMesh(blob(1, 1), leaf, Math.max(1, bushes.length));
-  const tmp = new THREE.Object3D();
-  const col = new THREE.Color();
+/** A lumpy low-poly blob for canopies and bushes. */
+function blob(): Mesh {
+  const m = ico(1, 2, null, true);
+  const pos = m.getVerticesData(VertexBuffer.PositionKind)!;
+  for (let i = 0; i < pos.length; i += 3) {
+    const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+    const k = 1 + (Math.sin(x * 7.1) + Math.cos(z * 6.3) + Math.sin(y * 5.7)) * 0.05;
+    pos[i] = x * k; pos[i + 1] = y * k * 0.9; pos[i + 2] = z * k;
+  }
+  const idx = m.getIndices()!;
+  const nrm: number[] = [];
+  VertexData.ComputeNormals(pos, idx, nrm);
+  m.setVerticesData(VertexBuffer.PositionKind, pos);
+  m.setVerticesData(VertexBuffer.NormalKind, nrm);
+  return m;
+}
+
+function addTrees(parent: Node, trees: Array<[number, number, number]>, bushes: Array<[number, number, number]>) {
+  const trunk = cyl(0.12, 0.18, 1.4, groundOcclusion(std(0x6b4a2f, { roughness: 0.95 })), { seg: 6 });
+  trunk.position.y = 0.7;
+  trunk.bakeCurrentTransformIntoVertices();
+  const leaf = groundOcclusion(std(0xffffff, { roughness: 0.85 }), 0.35, 0.6);
+  const canopy = blob();
+  canopy.material = leaf;
+  const bush = blob();
+  bush.material = leaf;
   const greens = [0x4f8f35, 0x5fa040, 0x3f7a2c, 0x6aa84a, 0x55923a];
-  let c = 0;
-  trees.forEach(([x, z, s], i) => {
-    tmp.position.set(x, 0, z); tmp.scale.set(s, s, s); tmp.rotation.set(0, rand() * 6, 0); tmp.updateMatrix();
-    trunks.setMatrixAt(i, tmp.matrix);
+  const trunkList: Inst[] = [], canopyList: Inst[] = [], bushList: Inst[] = [];
+  for (const [x, z, s] of trees) {
+    trunkList.push({ x, z, s, ry: rand() * 6 });
     for (let k = 0; k < 2; k++) {
-      tmp.position.set(x + (rand() - 0.5) * 0.4 * s, (1.7 + k * 0.75) * s, z + (rand() - 0.5) * 0.4 * s);
       const cs = s * (k ? 0.75 : 1.05);
-      tmp.scale.set(cs, cs, cs);
-      tmp.updateMatrix();
-      canopy.setMatrixAt(c, tmp.matrix);
-      canopy.setColorAt(c, col.setHex(greens[Math.floor(rand() * greens.length)]));
-      c++;
+      canopyList.push({ x: x + (rand() - 0.5) * 0.4 * s, y: (1.7 + k * 0.75) * s, z: z + (rand() - 0.5) * 0.4 * s, s: cs, color: greens[Math.floor(rand() * greens.length)] });
     }
-  });
-  canopy.count = c;
-  trunks.count = trees.length;
-  bushes.forEach(([x, z, s], i) => {
-    tmp.position.set(x, s * 0.55, z); tmp.scale.set(s, s * 0.85, s); tmp.rotation.set(0, rand() * 6, 0); tmp.updateMatrix();
-    bush.setMatrixAt(i, tmp.matrix);
-    bush.setColorAt(i, col.setHex(greens[Math.floor(rand() * greens.length)]).multiplyScalar(0.9));
-  });
-  bush.count = bushes.length;
-  for (const m of [trunks, canopy, bush]) { m.castShadow = true; m.receiveShadow = true; group.add(m); }
+  }
+  for (const [x, z, s] of bushes) bushList.push({ x, y: s * 0.55, z, s: [s, s * 0.85, s], ry: rand() * 6, color: mulHex(greens[Math.floor(rand() * greens.length)], 0.9) });
+  instances(trunk, trunkList);
+  instances(canopy, canopyList, { colors: true });
+  instances(bush, bushList, { colors: true });
+  for (const m of [trunk, canopy, bush]) { m.parent = parent; castShadows(m); }
+  receiveShadows(parent);
 }
