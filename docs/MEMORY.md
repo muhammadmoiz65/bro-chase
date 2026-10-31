@@ -69,8 +69,11 @@
 
 ## Open questions (Moiz hasn't decided)
 
-- 2026-10-31: Low FPS reported. Moiz asked whether to switch to a separate engine. Recommendation so far:
-  stay on Three.js and fix performance first. Being handled in the graphics thread.
+- 2026-10-31: **Switch game engine?** Moiz said "I think we need to change our game engine". The low FPS was fixed in PR #7
+  (settings, not the engine). We then built the same scene in Three.js and Babylon.js (`proto/engines/`, results in
+  [ENGINE-TEST.md](ENGINE-TEST.md)): same look, Babylon.js is 5x bigger to download and slower to load, and switching means
+  rewriting about 2,950 lines of client code. **Recommendation: stay on Three.js** and get the better look from real models.
+  Waiting on Moiz's choice.
 - Free with cosmetics, or paid? (The old plan recommended free with cosmetics only.)
 - Hosting for a public server (not set up yet; the game runs locally).
 
@@ -104,6 +107,13 @@
 - v0.1 base game · v0.2 Bill Collector, walk mode, brighter, random modes · v0.3 daylight, intro, cash + shop ·
   v0.4 Opps, crib claiming, unique cribs, defences, shop fix.
 - PR #1 gear + upgrade looks · PR #2 character creator · PR #3 play as Opp · PR #4 graphics + kill callouts · PR #5 vents. All merged.
+
+### Free 3D models
+- From the cloud, kenney.nl, poly.pizza and quaternius.com are blocked, but `raw.githubusercontent.com` works.
+  CC0 models that load from there: Kenney starter kits (`KenneyNL/Starter-Kit-City-Builder/main/models/*.glb`,
+  `KenneyNL/Starter-Kit-3D-Platformer/main/models/*.glb`, each with `models/Textures/colormap.png`) and the three.js examples
+  (`mrdoob/three.js/r170/examples/models/gltf/RobotExpressive/RobotExpressive.glb`, HDR skies in `examples/textures/equirectangular/`).
+- Engine test runs with `npm run proto` on port 5174 (needs the game server on 3000).
 
 ### Known issues
 - `README.md` is out of date: it still mentions fences, the generator and "Opp rage / Ohio fog" naming. Update it when touching docs.
