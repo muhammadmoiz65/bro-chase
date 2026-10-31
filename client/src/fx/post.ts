@@ -78,6 +78,9 @@ export class Post {
   private bloom: UnrealBloomPass;
   private grade: ShaderPass;
   private quality: number;
+  private forced: boolean;
+  private lastDrop = -999;
+  private scene: THREE.Scene;
   private dtSum = 0;
   private dtN = 0;
   private warm = 0; // seconds since start, ignore early hitches
@@ -88,8 +91,12 @@ export class Post {
   private danger = 0;
 
   constructor(private renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera) {
+    this.scene = scene;
     const q = new URLSearchParams(location.search).get('fx');
+    this.forced = q === '0' || q === '1' || q === '2';
     this.quality = q === '0' ? 0 : q === '1' ? 1 : 2;
+    // PCF (not PCFSoft) is much cheaper; the light's shadow.radius still softens it
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(renderer, rt);
@@ -102,11 +109,29 @@ export class Post {
     this.applyQuality();
   }
 
+  /**
+   * 2 = high: up to 1.5x pixel ratio (Retina is 2x, which is 78% more pixels for little gain), 4x MSAA, bloom.
+   * 1 = medium: 1x pixel ratio, 2x MSAA, bloom at low res.
+   * 0 = low: 1x pixel ratio, no MSAA, no bloom, smaller shadow map.
+   */
   private applyQuality() {
-    const pr = this.quality >= 2 ? Math.min(window.devicePixelRatio, 2) : this.quality === 1 ? Math.min(window.devicePixelRatio, 1.25) : 1;
+    const dpr = window.devicePixelRatio || 1;
+    const pr = this.quality >= 2 ? Math.min(dpr, 1.5) : this.quality === 1 ? Math.min(dpr, 1) : Math.min(dpr, 0.85);
     this.renderer.setPixelRatio(pr);
     this.bloom.enabled = this.quality >= 1;
-    this.renderer.shadowMap.type = this.quality >= 2 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    const samples = this.quality >= 2 ? 4 : this.quality === 1 ? 2 : 0;
+    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      if (rt.samples !== samples) { rt.samples = samples; rt.dispose(); }
+    }
+    const size = this.quality >= 1 ? 2048 : 1024;
+    this.scene.traverse((o) => {
+      const l = o as THREE.DirectionalLight;
+      if (l.isDirectionalLight && l.castShadow && l.shadow.mapSize.x !== size) {
+        l.shadow.mapSize.set(size, size);
+        l.shadow.map?.dispose();
+        l.shadow.map = null;
+      }
+    });
     this.resize();
   }
 
@@ -161,17 +186,23 @@ export class Post {
     this.adapt(dt);
   }
 
+  /** Watch the frame rate: step down fast when it drops under ~50 fps, step back up slowly when there is headroom. */
   private adapt(dt: number) {
     this.warm += dt;
-    if (this.warm < 4 || this.quality === 0) return;
+    if (this.warm < 2 || this.forced) return;
     this.dtSum += dt;
     this.dtN++;
-    if (this.dtSum < 3) return;
+    if (this.dtSum < 1.5) return;
     const avg = this.dtSum / this.dtN;
     this.dtSum = 0;
     this.dtN = 0;
-    if (avg > 1 / 38) {
+    if (avg > 1 / 50 && this.quality > 0) {
       this.quality--;
+      this.lastDrop = this.warm;
+      this.applyQuality();
+    } else if (avg < 1 / 58 && this.quality < 2 && this.warm - this.lastDrop > 30) {
+      this.quality++;
+      this.lastDrop = this.warm; // wait again before the next step up
       this.applyQuality();
     }
   }

@@ -11,8 +11,9 @@ import { DEFAULT_LOOK, parseLook } from '../../shared/look.ts';
 import { buildAvatar, type Avatar } from './avatar.ts';
 
 const CAM_OFFSET = new THREE.Vector3(0, 15, 10.5);
-const RING_POOL = 8;
-const LAMP_POOL = 6;
+// Every light costs per pixel on every lit surface, even at intensity 0, so the pools stay small.
+const RING_POOL = 3;
+const DISCO = [0xff3b6b, 0x3bd1ff, 0xffd23f];
 
 function textSprite(text: string, color = '#ffffff', size = 48, bg = 'rgba(0,0,0,0.55)'): THREE.Sprite {
   const c = document.createElement('canvas');
@@ -41,6 +42,22 @@ function textSprite(text: string, color = '#ffffff', size = 48, bg = 'rgba(0,0,0
   s.scale.set(c.width * scale * 0.9, c.height * scale * 0.9, 1);
   s.renderOrder = 10;
   return s;
+}
+
+/** Soft radial glow used for fake light pools on the ground. */
+function glowTexture(color: string): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, color);
+  g.addColorStop(0.35, color + '99');
+  g.addColorStop(1, color + '00');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
 function noiseTexture(base: string, speck: string, n: number, lines = false): THREE.CanvasTexture {
@@ -117,7 +134,9 @@ export class Renderer {
   private moon: THREE.DirectionalLight;
   private selfLight: THREE.PointLight;
   private ringLights: THREE.PointLight[] = [];
-  private lampLights: THREE.PointLight[] = [];
+  private lampHeadMat = new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffa040, emissiveIntensity: 2 });
+  private lampPoolGeo = new THREE.CircleGeometry(3.2, 32);
+  private lampPoolMat = new THREE.MeshBasicMaterial({ map: glowTexture('#ffb36b'), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
   private worldGroup = new THREE.Group();
   private builtR = -1;
   private lamps: THREE.Vector3[] = [];
@@ -144,7 +163,6 @@ export class Renderer {
   private clock = new THREE.Clock();
   private power = true;
   private zoom = 1;
-  private disco: THREE.PointLight[] = [];
   private pets = new Map<number, { g: THREE.Group; kind: string }>();
 
   constructor(container: HTMLElement) {
@@ -179,16 +197,6 @@ export class Renderer {
     for (let i = 0; i < RING_POOL; i++) {
       const l = new THREE.PointLight(0xfff1d6, 0, 10, 1.4);
       this.ringLights.push(l);
-      this.scene.add(l);
-    }
-    for (const c of [0xff3b6b, 0x3bd1ff, 0xffd23f]) {
-      const l = new THREE.PointLight(c, 0, 16, 1.2);
-      this.disco.push(l);
-      this.scene.add(l);
-    }
-    for (let i = 0; i < LAMP_POOL; i++) {
-      const l = new THREE.PointLight(0xffb36b, 0, 9, 1.5);
-      this.lampLights.push(l);
       this.scene.add(l);
     }
 
@@ -314,10 +322,14 @@ export class Renderer {
     for (const p of this.lamps) {
       const pole = new THREE.Mesh(poleGeo, poleMat);
       pole.position.set(p.x, 1.3, p.z);
-      const head = new THREE.Mesh(headGeo, new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffa040, emissiveIntensity: 2 }));
+      const head = new THREE.Mesh(headGeo, this.lampHeadMat);
       head.position.copy(p);
       this.lampHeads.push(head);
-      this.worldGroup.add(pole, head);
+      const pool = new THREE.Mesh(this.lampPoolGeo, this.lampPoolMat);
+      pool.rotation.x = -Math.PI / 2;
+      pool.position.set(p.x, 0.03, p.z);
+      pool.renderOrder = 1;
+      this.worldGroup.add(pole, head, pool);
     }
 
     // crib floors for every plot
@@ -778,21 +790,9 @@ export class Renderer {
     const moonTarget = ev.power ? 2.2 : 0.25;
     this.moon.intensity += (moonTarget - this.moon.intensity) * 0.06;
     this.hemi.color.lerp(new THREE.Color(ev.rage ? 0xff8090 : 0xdfe8ff), 0.05);
-    this.disco.forEach((l, i) => {
-      l.intensity = ev.disco ? 30 : 0;
-      const a = t / 500 + (i * Math.PI * 2) / 3;
-      l.position.set(focus.x + Math.cos(a) * 5, 3, focus.y + Math.sin(a) * 5);
-    });
-    for (const h of this.lampHeads) (h.material as THREE.MeshStandardMaterial).emissiveIntensity = ev.power ? 2 : 0.05;
-
-    // lamp light pool: nearest lamps to the camera target get real lights
-    const lampsNear = ev.power
-      ? [...this.lamps].sort((a, b) => a.distanceToSquared(this.target) - b.distanceToSquared(this.target)).slice(0, LAMP_POOL)
-      : [];
-    this.lampLights.forEach((l, i) => {
-      const p = lampsNear[i];
-      if (p) { l.position.copy(p); l.intensity = 14; } else l.intensity = 0;
-    });
+    this.lampHeadMat.emissiveIntensity = ev.power ? 2 : 0.05;
+    // street lamps light the ground with cheap glow decals instead of real lights
+    this.lampPoolMat.opacity += ((ev.power ? 0.55 : 0) - this.lampPoolMat.opacity) * 0.08;
 
     // doors glide to their target height
     for (const d of this.doors.values()) {
@@ -867,9 +867,15 @@ export class Renderer {
 
     // ring light pool: nearest lit bros get a real light
     lit.sort((a, b) => Math.hypot(a.x - focus.x, a.y - focus.y) - Math.hypot(b.x - focus.x, b.y - focus.y));
+    // (in disco mode the same pool becomes the spinning party lights)
     this.ringLights.forEach((l, i) => {
       const p = lit[i];
-      if (p) { l.position.set(p.x, 1.6 + p.z, p.y); l.intensity = 22; l.distance = RING_LIGHT_RANGE * 4; }
+      if (ev.disco) {
+        const a = t / 500 + (i * Math.PI * 2) / 3;
+        l.color.setHex(DISCO[i % DISCO.length]);
+        l.position.set(focus.x + Math.cos(a) * 5, 3, focus.y + Math.sin(a) * 5);
+        l.intensity = 30; l.distance = 16;
+      } else if (p) { l.color.setHex(0xfff1d6); l.position.set(p.x, 1.6 + p.z, p.y); l.intensity = 22; l.distance = RING_LIGHT_RANGE * 4; }
       else l.intensity = 0;
     });
     this.selfLight.position.set(focus.x, 1.6, focus.y);
@@ -909,7 +915,7 @@ export class Renderer {
     // ripples
     this.ripples = this.ripples.filter((r) => {
       const age = (t - r.born) / (r.life ?? 900);
-      if (age >= 1) { r.mesh.removeFromParent(); r.mesh.geometry.dispose(); return false; }
+      if (age >= 1) { r.mesh.removeFromParent(); r.mesh.geometry.dispose(); (r.mesh.material as THREE.Material).dispose(); return false; }
       const s = 0.3 + age * r.r;
       r.mesh.scale.set(s, s, s);
       (r.mesh.material as THREE.MeshBasicMaterial).opacity = (r.mesh.userData.o ?? 0.6) * (1 - age);
@@ -935,7 +941,7 @@ export class Renderer {
     });
     this.floaters = this.floaters.filter((f) => {
       const age = (t - f.born) / 1200;
-      if (age >= 1) { f.s.removeFromParent(); return false; }
+      if (age >= 1) { f.s.removeFromParent(); f.s.material.map?.dispose(); f.s.material.dispose(); return false; }
       f.s.position.y += dt * 0.8;
       f.s.material.opacity = 1 - age;
       return true;
