@@ -37,6 +37,11 @@
           </label>
         </div>
 
+        <div class="row look-row">
+          <span class="muted small">Your bro's look is saved to your account.</span>
+          <button id="btn-customize" class="small">Customize character</button>
+        </div>
+
         <button id="btn-quick" class="big">QUICK PLAY</button>
 
         <div class="tabs">
@@ -98,6 +103,23 @@
         </div>
       </div>
       <p id="menu-error" class="error"></p>
+    </div>
+  </div>
+
+  <!-- ===== Character creator ===== -->
+  <div id="creator" class="screen hidden">
+    <div class="creator-card">
+      <h2 id="creator-title" class="creator-title">MAKE YOUR BRO</h2>
+      <div class="creator-body">
+        <div id="creator-preview" title="Drag to spin"></div>
+        <div id="creator-controls"></div>
+      </div>
+      <p id="creator-status" class="muted small"></p>
+      <div class="row creator-actions">
+        <button id="creator-random" class="ghost">Randomize</button>
+        <button id="creator-cancel" class="ghost">Cancel</button>
+        <button id="creator-save">Save look</button>
+      </div>
     </div>
   </div>
 
@@ -218,6 +240,7 @@
       <div class="row">
         <button id="btn-role-bro" class="small">Play as bro</button>
         <button id="btn-role-six" class="small">Play as Opp</button>
+        <button id="btn-look" class="small ghost">Change look</button>
       </div>
       <button id="btn-start" class="big hidden">START THE NIGHT</button>
     </div>

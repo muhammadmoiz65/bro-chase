@@ -1,11 +1,14 @@
 // Account + lobby API. The device token lives in localStorage: that is what binds
 // a guest account to this device.
 
+import { encodeLook, type Look } from '../../shared/look.ts';
+
 export interface Account {
   id: string;
   name: string;
   username: string | null;
   hasPassword: boolean;
+  look: Look | null;
   stats: { nights: number; wins: number; catches: number; mogs: number; revives: number };
 }
 
@@ -35,6 +38,7 @@ export const api = {
   me: () => call<{ account: Account; devices: number }>('GET', '/api/me'),
   captcha: () => call<{ kind: 'pow'; challenge: string; bits: number } | { kind: 'turnstile'; siteKey: string }>('GET', '/api/captcha'),
   guest: (captcha: unknown, name?: string) => call<{ token: string; account: Account }>('POST', '/api/guest', { captcha, name }),
+  setLook: (look: Look) => call<{ account: Account }>('POST', '/api/me/look', { look: encodeLook(look) }),
   setName: (name: string) => call<{ account: Account }>('POST', '/api/me/name', { name }),
   credentials: (username: string, password: string, currentPassword?: string) =>
     call<{ account: Account }>('POST', '/api/me/credentials', { username, password, currentPassword }),

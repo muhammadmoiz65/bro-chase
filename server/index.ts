@@ -74,6 +74,10 @@ export function startServer(opts: StartOptions = {}): Promise<{ server: Server; 
     const acc = authed(req, res);
     if (acc) res.json({ account: accounts.setName(acc.id, req.body?.name) });
   }));
+  app.post('/api/me/look', wrap((req, res) => {
+    const acc = authed(req, res);
+    if (acc) res.json({ account: accounts.setLook(acc.id, req.body?.look) });
+  }));
   app.post('/api/me/credentials', wrap((req, res) => {
     const acc = authed(req, res);
     if (acc) res.json({ account: accounts.setCredentials(acc.id, req.body?.username, req.body?.password, req.body?.currentPassword) });
@@ -119,7 +123,7 @@ export function startServer(opts: StartOptions = {}): Promise<{ server: Server; 
       ws.close(4005, (e as Error).message.slice(0, 100));
       return;
     }
-    room.join(acc.id, acc.name, ws, role);
+    room.join(acc.id, acc.name, ws, role, acc.look);
     ws.on('message', (data) => {
       let msg: ClientMsg;
       try { msg = JSON.parse(String(data)); } catch { return; }
