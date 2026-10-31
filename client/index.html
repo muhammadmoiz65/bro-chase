@@ -32,7 +32,7 @@
           <label>Play as
             <select id="role-select">
               <option value="bro">Bro</option>
-              <option value="opp">Opp (needs 4 bros each)</option>
+              <option value="opp">Opp (hunt the bros)</option>
             </select>
           </label>
         </div>
@@ -93,6 +93,7 @@
             <li><kbd>R</kbd> hold to repair your doors and defences</li>
             <li><kbd>Y</kbd>/<kbd>N</kbd> answer a knock, <kbd>Tab</kbd> scoreboard, <kbd>Enter</kbd> chat</li>
           </ul>
+          <p>Want to hunt instead? Pick <b>Opp</b> above. You're blind but you hear everything: <kbd>Q</kbd> screech to ping nearby bros, <kbd>Space</kbd> to lunge, <kbd>E</kbd> to smash doors. There's one Opp slot per 4 bros; bot bros fill in if there aren't enough players, and the AI takes any slot nobody picked.</p>
           <p>Got caught? You're in <b>NPC mode</b>. A living bro standing next to you for 3 seconds brings you back. Survive until the timer runs out to touch grass.</p>
         </div>
       </div>
@@ -122,6 +123,12 @@
         <div class="item" data-item="bribe"><kbd>4</kbd> Bribe <b id="inv-bribe">0</b></div>
       </div>
       <div id="effects"></div>
+      <div id="hunter" class="hidden">
+        <div class="ability" id="ab-screech"><kbd>Q</kbd> SCREECH <b></b><i></i></div>
+        <div class="ability" id="ab-lunge"><kbd>Space</kbd> LUNGE <b></b><i></i></div>
+        <div class="ability" id="ab-smash"><kbd>E</kbd> SMASH DOOR</div>
+      </div>
+      <div id="queued" class="hidden"></div>
       <div id="role-badge"></div>
       <div id="aura"><div id="aura-fill"></div><span id="aura-text">AURA 60</span></div>
     </div>
@@ -142,6 +149,18 @@
       <div><kbd>Tab</kbd> scores · <kbd>Enter</kbd> chat</div>
     </div>
     <div id="mode-flash"></div>
+    <div id="heartbeat"></div>
+    <div id="sound-compass"></div>
+    <div id="controls-opp" class="hidden">
+      <div class="controls-head"><b>Opp</b><span class="muted small">H to hide</span></div>
+      <div><kbd>WASD</kbd> stalk</div>
+      <div><kbd>Q</kbd> screech: pings every bro nearby</div>
+      <div><kbd>Space</kbd> lunge (short burst)</div>
+      <div><kbd>E</kbd> smash a door or defence</div>
+      <div><kbd>+</kbd> <kbd>-</kbd> camera zoom</div>
+      <div><kbd>Tab</kbd> scores · <kbd>Enter</kbd> chat</div>
+      <p class="muted small">You're blind. Ripples are sounds. Arrows at the screen edge point to noise you can't see. The red glow means a bro is close.</p>
+    </div>
     <div id="shop" class="hidden">
       <div class="row between"><h2>SHOP</h2><span id="shop-cash" class="shop-cash">$0</span></div>
       <p class="muted small">Cash comes from street pickups, reviving, letting bros in, mogging, banana stuns and surviving the night. You keep it between nights.</p>
@@ -149,6 +168,18 @@
       <button id="shop-close" class="ghost small">Close (B / Esc)</button>
     </div>
     <div id="intro" class="hidden">
+      <div class="intro-opp">
+        <h2>YOU ARE AN OPP</h2>
+        <p class="intro-lead">You can't see. You can <b>hear</b>.</p>
+        <ul class="intro-rules">
+          <li>Every footstep, sprint, knock and repair makes a <b>ripple</b>. Red arrows at the screen edge point to noise you can't see yet.</li>
+          <li><kbd>Q</kbd> <b>Screech</b>: bounces off every bro nearby and marks where they are for a few seconds. They hear it too.</li>
+          <li><kbd>Space</kbd> <b>Lunge</b> to close the gap. <kbd>E</kbd> smashes crib doors and defences.</li>
+          <li>The red glow and heartbeat get stronger when a bro is close. Touch a bro to catch them.</li>
+          <li>Ring lights stun you and banana peels trip you. Catch every bro before sunrise to win.</li>
+        </ul>
+      </div>
+      <div class="intro-bro">
       <h2>BRO CHASE</h2>
       <p class="intro-lead">Survive the night. The <b>Opps</b> are outside and they are not here to chat.</p>
       <ul class="intro-rules">
@@ -164,6 +195,7 @@
         <span><kbd>R</kbd> repair</span><span><kbd>Y</kbd>/<kbd>N</kbd> answer knock</span><span><kbd>Tab</kbd> scores</span>
         <span><kbd>Enter</kbd> chat</span><span><kbd>B</kbd> shop</span><span><kbd>1</kbd>-<kbd>4</kbd> items</span>
         <span><kbd>H</kbd> controls</span><span><kbd>+</kbd>/<kbd>-</kbd> zoom</span>
+      </div>
       </div>
       <div id="intro-bar"><div></div></div>
       <button id="intro-close" class="small">Got it (any key)</button>
@@ -208,6 +240,7 @@
         <button data-act="chat">CHAT</button>
         <button data-act="shop">SHOP</button>
         <button data-act="item1">BANANA</button>
+        <button data-act="screech" class="opp-only">SCREECH</button>
       </div>
     </div>
   </div>

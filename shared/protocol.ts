@@ -14,11 +14,14 @@ export interface EntView {
   y: number;
   n: string; // display name
   l?: 1; // ring light on
-  ai?: 1; // AI-controlled Opp
+  ai?: 1; // AI-controlled Opp, or a bot bro
   st?: 1; // stunned (mogged)
   rv?: number; // revive progress 0..1 for NPCs
   c?: number; // colour hue 0..359
   z?: number; // jump height
+  gk?: number; // kicks tier 1..3
+  gv?: number; // body armour tier 1..3
+  sh?: 1; // armour just blocked a grab (flash)
 }
 
 export interface SelfView {
@@ -34,6 +37,13 @@ export interface SelfView {
   bribe: number; // seconds left
   defLv: Record<DefKind, number>; // 1..3 per type
   defCount: number;
+  kicks: number; // shoes tier 0..3
+  vest: number; // body armour tier 0..3
+  shields: number; // grabs the armour can still block tonight
+  scr?: number; // Opp players: screech cooldown left (s)
+  lun?: number; // lunge cooldown left (s)
+  sense?: number; // 0..1, how close the nearest bro is (heartbeat)
+  wantOpp?: boolean; // queued to play as an Opp when a slot opens
 }
 
 export interface DefView { id: number; k: DefKind; x: number; y: number; hp: number; lv: number; own?: 1; tx?: number; ty?: number; off?: 1 }
@@ -70,7 +80,7 @@ export interface LobbyListing {
   quick: boolean;
 }
 
-export type NoiseKind = 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog' | 'decoy' | 'bass';
+export type NoiseKind = 'screech' | 'lunge' | 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog' | 'decoy' | 'bass';
 export interface NoiseView { id: number; x: number; y: number; r: number; k: NoiseKind }
 export interface DropView { id: number; x: number; y: number; k: 'aura' | 'cash' }
 
@@ -120,12 +130,14 @@ export type ServerMsg =
   | { t: 'result'; win: boolean; night: number; mvp?: string }
   | { t: 'aura'; d: number; why: string }
   | { t: 'cash'; d: number; why: string }
+  | { t: 'echo'; x: number; y: number; r: number; pts: Array<[number, number]> } // screech result for the hunter
   | { t: 'ping'; at: number }
   | { t: 'kicked'; reason: string };
 
 export type ClientMsg =
   | { t: 'input'; dx: number; dy: number; zoom: boolean; sneak?: boolean }
-  | { t: 'jump' }
+  | { t: 'jump' } // bros: jump. Opps: lunge
+  | { t: 'screech' } // Opps: echo pulse that pings nearby bros
   | { t: 'buy'; item: ShopId }
   | { t: 'item'; item: ItemId }
   | { t: 'build'; kind: DefKind }

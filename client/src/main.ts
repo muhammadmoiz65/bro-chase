@@ -5,7 +5,8 @@ import { Hud } from './hud.ts';
 import { Input, type Action } from './input.ts';
 import { ambient, chant, sfx } from './audio.ts';
 import { Announcer } from './fx/announcer.ts';
-import { EVENTS, ITEM, JUMP, SPEED } from '../../shared/constants.ts';
+import { EVENTS, ITEM, MONSTER, SPEED } from '../../shared/constants.ts';
+import { airborne, freshJump, kicksSpeed, stepJump, tryJump } from '../../shared/gear.ts';
 import {
   cellAt, cribAtPos, dist, doorBlocks, doorCenter, move, overFence, type CribView, type DoorSide,
 } from '../../shared/world.ts';
@@ -52,7 +53,8 @@ class Game {
   counts = { bros: 0, alive: 0, opps: 0 };
   cribs = new Map<number, CribView>();
   snaps: Snap[] = [];
-  me = { x: 0, y: 0, jumpT: 0, jumpCd: 0, init: false };
+  me = { x: 0, y: 0, jump: freshJump(), init: false };
+  kicks = 0;
   npc = false;
   stunned = false;
   lightOn = false;
@@ -64,6 +66,12 @@ class Game {
   closed = false;
   lastPop = 0;
   raf = 0;
+  // playing as an Opp
+  sense = 0;
+  lunCd = 0;
+  lungeT = 0;
+  lastBeat = 0;
+  sounds: Array<{ x: number; y: number; r: number; born: number }> = [];
 
   constructor(opts: JoinOpts) {
     const q = new URLSearchParams({ token: getToken() ?? '', mode: opts.mode, role: opts.role });
@@ -103,7 +111,13 @@ class Game {
         hud.myName = account?.name ?? '';
         if (m.notice) hud.chat('server', 'bro', m.notice, true);
         hud.chat('server', 'bro', 'Press Enter to chat, Tab for scores, H for controls.', true);
-        hud.intro();
+        hud.intro(12, m.you.role === 'opp');
+        break;
+      case 'echo':
+        renderer.echo(m.x, m.y, m.r, m.pts, MONSTER.echoSec);
+        sfx.screech();
+        m.pts.forEach((p) => setTimeout(() => sfx.ping(), 150 + (dist(p[0], p[1], m.x, m.y) / m.r) * 1400));
+        if (!m.pts.length) hud.chat('server', 'bro', 'Your screech came back empty. No bros nearby.', true);
         break;
       case 'snap': this.onSnap(m); break;
       case 'feed':
@@ -164,11 +178,16 @@ class Game {
     this.ev = m.ev;
     this.lobby = m.lobby;
     this.counts = m.counts;
+    if (m.you.role !== this.role && m.you.role === 'opp') hud.intro(10, true);
     this.role = m.you.role;
     this.myCrib = m.you.crib;
     this.aura = m.you.aura;
+    this.sense = m.you.sense ?? 0;
+    this.lunCd = m.you.lun ?? 0;
+    hud.hunter(m.you, m.phase);
     hud.wallet(m.you);
     this.drink = m.you.drink;
+    this.kicks = m.you.kicks ?? 0;
     renderer.setProps(m.props);
     renderer.setDefs(m.defs);
     if (m.R !== this.R || !this.me.init) { this.R = m.R; renderer.buildWorld(m.R); }
@@ -177,12 +196,16 @@ class Game {
       renderer.updateCribs(m.cribs, this.myCrib, this.role === 'bro' && this.phase !== 'lockin');
     }
     if (m.drops) renderer.setDrops(m.drops);
+    const hunter = this.role === 'opp';
     for (const n of m.noises) {
-      if (!renderer.addNoise(n.id, n.x, n.y, n.r, n.k)) continue;
-      // hear what's near you: footsteps, pets, smashing
+      if (!renderer.addNoise(n.id, n.x, n.y, n.r, hunter, n.k)) continue;
+      // hear what's near you: footsteps, pets, smashing. Opps hear much farther.
       const d = dist(n.x, n.y, this.me.x, this.me.y);
-      if (d > 14) continue;
-      const vol = Math.max(0.15, 1 - d / 14);
+      if (hunter && d > 1.5 && n.k !== 'screech' && n.k !== 'lunge') this.sounds.push({ x: n.x, y: n.y, r: n.r, born: performance.now() });
+      if (n.k === 'screech') { if (!hunter && d < 24) sfx.screech(Math.max(0.2, 1 - d / 24)); continue; }
+      const range = hunter ? 22 : 14;
+      if (d > range) continue;
+      const vol = Math.max(0.15, 1 - d / range);
       const pan = Math.max(-1, Math.min(1, (n.x - this.me.x) / 8));
       if (n.k === 'step' || n.k === 'zoom') sfx.step(vol * (n.k === 'zoom' ? 1.6 : 1), pan);
       else if (n.k === 'land') sfx.land(vol);
@@ -228,11 +251,14 @@ class Game {
 
   action(a: Action) {
     switch (a) {
+      case 'screech': if (this.role === 'opp') this.send({ t: 'screech' }); break;
       case 'jump':
-        if (this.role === 'bro' && !this.npc && this.me.jumpT <= 0 && this.me.jumpCd <= 0) {
-          this.me.jumpT = this.ev.lowgrav ? JUMP.lowGravSec : JUMP.sec;
-          sfx.jump();
+        if (this.role === 'opp' && this.phase === 'lockin' && this.lunCd <= 0 && this.lungeT <= 0 && !this.stunned) {
+          this.lungeT = MONSTER.lungeSec;
+          this.lunCd = MONSTER.lungeCd;
+          sfx.lunge();
         }
+        if (this.role === 'bro' && !this.npc && tryJump(this.me.jump, this.kicks, this.ev.lowgrav)) sfx.jump();
         this.send({ t: 'jump' });
         break;
       case 'light': this.send({ t: 'light' }); sfx.light(); break;
@@ -299,20 +325,14 @@ class Game {
     }
     if (!this.me.init || this.stunned) return;
     const me = this.me;
-    me.jumpCd = Math.max(0, me.jumpCd - dt);
-    if (me.jumpT > 0) {
-      me.jumpT -= dt;
-      if (me.jumpT <= 0) {
-        if (overFence(me.x, me.y, this.R)) me.jumpT = 0.05;
-        else { me.jumpT = 0; me.jumpCd = JUMP.cooldown; }
-      }
-    }
+    stepJump(me.jump, dt, this.ev.lowgrav, overFence(me.x, me.y, this.R));
     let sp: number;
     if (this.role === 'opp') {
       sp = this.phase === 'lockin' ? SPEED.monsterPlayer * (this.ev.rage ? EVENTS.rageSpeed : 1) * (this.ev.power ? 1 : 1.1) : SPEED.walk;
-    } else sp = (this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : mv.sneak ? SPEED.sneak : SPEED.walk) * (this.drink > 0 && !this.npc ? ITEM.drinkSpeed : 1);
+      if (this.lungeT > 0) { sp *= MONSTER.lungeSpeed; this.lungeT -= dt; }
+    } else sp = (this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : mv.sneak ? SPEED.sneak : SPEED.walk) * (this.drink > 0 && !this.npc ? ITEM.drinkSpeed : 1) * (this.npc ? 1 : kicksSpeed(this.kicks));
     if (mv.dx || mv.dy) {
-      [me.x, me.y] = move(me.x, me.y, mv.dx * sp * dt, mv.dy * sp * dt, this.R, this.doors, { ghost: this.npc, airborne: me.jumpT > 0 });
+      [me.x, me.y] = move(me.x, me.y, mv.dx * sp * dt, mv.dy * sp * dt, this.R, this.doors, { ghost: this.npc, airborne: airborne(me.jump) });
     }
   }
 
@@ -331,7 +351,10 @@ class Game {
     const sideName = (s: DoorSide) => (s === 0 ? 'front' : 'back');
     if (this.role === 'opp') {
       if (best && doorBlocks(this.doors(best.plot, best.side))) return 'E: smash the door';
-      return this.phase === 'lockin' ? 'Listen for noise ripples. Touch a bro to collect them.' : 'The night starts soon. Get ready.';
+      if (this.phase !== 'lockin') return 'You come out when the night starts. Q screech · Space lunge · E smash';
+      if (this.sense > 0.6) return 'A bro is RIGHT here. Lunge (Space)!';
+      if (this.sense > 0) return 'You can feel a bro close by. Screech (Q) to find them.';
+      return 'Follow the ripples and red arrows. Q screech pings every bro nearby.';
     }
     if (this.myCrib < 0 && this.phase !== 'lockin') return 'Walk into any free crib (no name on it) to make it yours';
     if (best) {
@@ -359,8 +382,7 @@ class Game {
     if (self && this.me.init) {
       self.x = this.me.x;
       self.y = this.me.y;
-      const js = this.ev.lowgrav ? JUMP.lowGravSec : JUMP.sec, jh = this.ev.lowgrav ? JUMP.lowGravHeight : JUMP.height;
-      if (this.role === 'bro' && !this.npc) self.z = this.me.jumpT > 0 ? Math.max(0, Math.sin(Math.PI * (1 - this.me.jumpT / js))) * jh : 0;
+      if (this.role === 'bro' && !this.npc) self.z = this.me.jump.z;
     }
     // the Opp chant when one is close
     if (this.role === 'bro') {
@@ -380,6 +402,7 @@ class Game {
       }
     }
     renderer.frame(ents, this.selfId, this.me, this.ev, this.role === 'opp');
+    this.hunterFrame(now);
     ambient(this.ev.power, this.role === 'bro' && !this.npc ? renderer.danger : 0);
     hud.timer(this.phase, this.phaseEnd, this.night, this.counts);
     hud.hint(this.hintText());
@@ -387,6 +410,33 @@ class Game {
     if (this.scoresOpen && now - this.scoreTimer > 1000) { this.scoreTimer = now; this.send({ t: 'scores' }); }
   }
   private lastFrame = 0;
+
+  /** Sound vision for an Opp: edge arrows to off-screen noise, and the heartbeat. */
+  private hunterFrame(now: number) {
+    if (this.role !== 'opp') { if (this.sounds.length) { this.sounds = []; hud.compass([]); } return; }
+    const life = 2600;
+    this.sounds = this.sounds.filter((s) => now - s.born < life).slice(-24);
+    const w = window.innerWidth, h = window.innerHeight, pad = 28;
+    const c = renderer.toScreen(this.me.x, this.me.y);
+    const marks: Array<{ x: number; y: number; a: number; o: number; loud: boolean }> = [];
+    for (const s of this.sounds) {
+      const p = renderer.toScreen(s.x, s.y);
+      if (!p.behind && p.sx > pad && p.sx < w - pad && p.sy > pad && p.sy < h - pad) continue; // the ripple itself is on screen
+      const a = Math.atan2(p.sy - c.sy, p.sx - c.sx);
+      // from the player's spot along that angle to the screen edge
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const tx = ca > 0 ? (w - pad - c.sx) / ca : ca < 0 ? (pad - c.sx) / ca : Infinity;
+      const ty = sa > 0 ? (h - pad - c.sy) / sa : sa < 0 ? (pad - c.sy) / sa : Infinity;
+      const k = Math.max(0, Math.min(tx, ty));
+      marks.push({ x: c.sx + ca * k, y: c.sy + sa * k, a, o: Math.max(0, 1 - (now - s.born) / life), loud: s.r >= 7 });
+    }
+    hud.compass(marks);
+    if (this.phase === 'lockin' && this.sense > 0 && now - this.lastBeat > 1100 - 700 * this.sense) {
+      this.lastBeat = now;
+      sfx.beat(0.3 + this.sense * 0.7);
+      hud.beat();
+    }
+  }
 }
 
 input.onAction = (a) => {

@@ -171,6 +171,12 @@ export const sfx = {
     if (tier >= 2) { tone(55, 0.5, 'sine', 0.3 + tier * 0.04, -15); noise(0.4, 300, 0.6, 0.12, { sweep: 4000, attack: 0.15, delay: 0 }); }
     if (tier >= 4) noise(0.6, 6000, 0.5, 0.08, { type: 'highpass', verb: 0.8, delay: 0.05 });
   },
+  /** The Opp's echo screech: a falling shriek. */
+  screech(vol = 1) { tone(1400, 0.5, 'sawtooth', 0.12 * vol, -1100, { verb: 0.6 }); tone(900, 0.4, 'square', 0.06 * vol, -600, { delay: 0.09, verb: 0.6 }); },
+  ping() { tone(1800, 0.08, 'sine', 0.06, 0, { verb: 0.4 }); },
+  lunge() { tone(160, 0.25, 'sawtooth', 0.12, 260); noise(0.25, 800, 0.8, 0.1, { sweep: 2000 }); },
+  /** A heartbeat thump; louder when a bro is close. */
+  beat(vol: number) { tone(58, 0.11, 'sine', 0.35 * vol, 0, { verb: 0 }); tone(50, 0.13, 'sine', 0.28 * vol, 0, { delay: 0.15, verb: 0 }); },
   win() { [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.35, 'triangle', 0.13, 0, { delay: i * 0.14, verb: 0.5 })); },
   lose() { [392, 330, 262, 196].forEach((f, i) => tone(f, 0.45, 'sawtooth', 0.08, 0, { delay: i * 0.18, verb: 0.5 })); },
 };
