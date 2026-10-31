@@ -16,6 +16,11 @@
 ### Platform and look
 - 2026-10-31: **Web based and online.**
 - 2026-10-31: **2.5D with Three.js** (3D world, angled camera, 2D grid logic). Replaced an earlier pick of 2D top-down Phaser.
+  **Replaced** by Babylon.js (next entry).
+- 2026-10-31: **Switch the client engine to Babylon.js.** Moiz said "I think we need to change our game engine", saw the side-by-side
+  test (`proto/engines/`, [ENGINE-TEST.md](ENGINE-TEST.md)) and chose Babylon.js on the decision card, over the recommendation to stay
+  on Three.js. Still 2.5D, still a browser game, server and `shared/` unchanged. The move happens in 3 PRs: (1) engine core + world,
+  (2) characters, gear looks, creator, (3) effects, post-processing, then remove Three.js. Don't add new Three.js code.
 - 2026-10-31: **Brain-rot theme** (memes like 67, aura, mog, rizz, Ohio).
 - 2026-10-31: **Bright game.** Only power cuts are dark. Moiz asked twice that it not be dark.
 - 2026-10-31: Power cuts are **random and last 10 to 20 seconds**, with smooth transitions. Other short random modes too (fog, rage, low gravity, disco, aura rain).
@@ -69,11 +74,6 @@
 
 ## Open questions (Moiz hasn't decided)
 
-- 2026-10-31: **Switch game engine?** Moiz said "I think we need to change our game engine". The low FPS was fixed in PR #7
-  (settings, not the engine). We then built the same scene in Three.js and Babylon.js (`proto/engines/`, results in
-  [ENGINE-TEST.md](ENGINE-TEST.md)): same look, Babylon.js is 5x bigger to download and slower to load, and switching means
-  rewriting about 2,950 lines of client code. **Recommendation: stay on Three.js** and get the better look from real models.
-  Waiting on Moiz's choice.
 - Free with cosmetics, or paid? (The old plan recommended free with cosmetics only.)
 - Hosting for a public server (not set up yet; the game runs locally).
 

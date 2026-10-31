@@ -13,7 +13,7 @@ the blind **Opps** hunt them by sound, and when your door breaks you run to a fr
 - **Genre:** co-op survival horror / defend-your-base, in the same genre as Silent Castle, but an
   **original game** with its own world, rules, names and items. Never copy another game's content.
 - **Platform:** web browser, online multiplayer. No install. Desktop first, phone supported with touch controls.
-- **View:** 2.5D. A Three.js 3D world under an angled camera, with game logic on a flat 2D grid.
+- **View:** 2.5D. A Babylon.js 3D world under an angled camera, with game logic on a flat 2D grid.
 - **Theme:** brain-rot memes (67, aura, mog, rizz, Ohio, sigma, "we outside", W/L, NPC).
   Bright, funny and readable, not grim.
 - **Players:** no player cap. One Opp per 4 bros (rounded up). AI fills empty Opp slots.
@@ -65,7 +65,7 @@ Random short modes interrupt the night for 10 to 20 seconds each: power cut, fog
 
 | Layer | Choice |
 | --- | --- |
-| Client | Three.js + TypeScript, built with Vite (`client/`) |
+| Client | Babylon.js + TypeScript, built with Vite (`client/`). Moving from Three.js (decided 2026-10-31) |
 | Server | Node.js 22.13+, Express + `ws` WebSockets, authoritative simulation at 20 ticks/s (`server/`) |
 | Shared rules | `shared/` (constants, protocol, world, gear, look) used by client and server |
 | Data | SQLite via built-in `node:sqlite` (`data/bro-chase.db`) |

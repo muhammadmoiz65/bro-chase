@@ -58,7 +58,11 @@ Neither engine is clearly faster. Babylon.js is bigger and slower to load, and d
 **Unity or Godot web builds** would be a much bigger change: a rewrite of the whole client in another language,
 a 10 to 30 MB download before the game starts, slower start on phones, and the multiplayer code done again. Not worth it for a browser game.
 
-## Recommendation
+## Decision
+
+**2026-10-31: Moiz chose to switch to Babylon.js.** The recommendation below was to stay; the switch is planned in 3 PRs (see MEMORY.md).
+
+## Recommendation (before the decision)
 
 **Stay on Three.js.** Babylon.js gives the same picture, not a better one, at the cost of a full client rewrite and a 5x bigger download.
 What makes the game look better is real 3D models, good lighting and animated characters, which is what the graphics thread is building now in Three.js.
