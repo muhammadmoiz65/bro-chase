@@ -178,3 +178,16 @@ export const DEF = {
   bassStunSec: 1.1,
   bassNoise: 8,
 };
+
+/** Playing as an Opp: abilities, plus the bot bros that fill bro slots so the 4:1 ratio holds. */
+export const MONSTER = {
+  screechCd: 14, // Q: echo pulse cooldown
+  screechRange: 18, // tiles: bros inside this get pinged for the hunter
+  screechNoise: 12, // everyone nearby hears it too (fair warning)
+  echoSec: 3.2, // how long pings stay on the hunter's screen
+  lungeCd: 5, // Space: short burst
+  lungeSec: 0.35,
+  lungeSpeed: 2.6, // speed multiplier while lunging
+  senseRange: 9, // the heartbeat gets stronger as a bro gets closer than this
+  maxBots: 16,
+};

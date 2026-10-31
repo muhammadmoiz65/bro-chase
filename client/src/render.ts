@@ -127,7 +127,8 @@ export class Renderer {
   private props = new Map<number, THREE.Object3D>();
   private defs = new Map<number, { g: THREE.Group; bar: THREE.Mesh; lv: number; k: string }>();
   private shots: Array<{ m: THREE.Object3D; born: number }> = [];
-  private ripples: Array<{ mesh: THREE.Mesh; born: number; r: number }> = [];
+  private ripples: Array<{ mesh: THREE.Mesh; born: number; r: number; life?: number }> = [];
+  private blips: Array<{ g: THREE.Object3D; born: number; life: number }> = [];
   private seenNoise = new Set<number>();
   private floaters: Array<{ s: THREE.Sprite; born: number }> = [];
   private target = new THREE.Vector3();
@@ -623,19 +624,64 @@ export class Renderer {
     this.shots.push({ m: g, born: now });
   }
 
-  addNoise(id: number, x: number, y: number, r: number): boolean {
+  /** `hunter`: the Opp's sound vision, where every ripple glows hot and thick. */
+  addNoise(id: number, x: number, y: number, r: number, hunter = false): boolean {
     if (this.seenNoise.has(id)) return false;
     this.seenNoise.add(id);
     if (this.seenNoise.size > 500) this.seenNoise = new Set([...this.seenNoise].slice(-200));
+    const color = hunter ? (r >= 7 ? 0xffd23f : 0xff3b6b) : r >= 9 ? 0xff5577 : 0xcfd6ff;
     const mesh = new THREE.Mesh(
-      new THREE.RingGeometry(0.92, 1, 40),
-      new THREE.MeshBasicMaterial({ color: r >= 9 ? 0xff5577 : 0xcfd6ff, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }),
+      new THREE.RingGeometry(hunter ? 0.85 : 0.92, 1, 40),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: hunter ? 0.9 : 0.6, side: THREE.DoubleSide, depthWrite: false }),
     );
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(x, 0.06, y);
+    mesh.userData.o = hunter ? 0.9 : 0.6;
     this.scene.add(mesh);
     this.ripples.push({ mesh, born: performance.now(), r });
     return true;
+  }
+
+  /** The Opp's screech: a big pulse from (x, y), then a marker on every bro it bounced off. */
+  echo(x: number, y: number, r: number, pts: Array<[number, number]>, lifeSec: number) {
+    const pulse = new THREE.Mesh(
+      new THREE.RingGeometry(0.96, 1, 64),
+      new THREE.MeshBasicMaterial({ color: 0xff3b6b, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    pulse.rotation.x = -Math.PI / 2;
+    pulse.position.set(x, 0.08, y);
+    pulse.userData.o = 0.9;
+    this.scene.add(pulse);
+    this.ripples.push({ mesh: pulse, born: performance.now(), r, life: 1400 });
+    for (const [px, py] of pts) {
+      const delay = (Math.hypot(px - x, py - y) / r) * 1400; // each ping shows when the pulse reaches it
+      setTimeout(() => {
+        const g = new THREE.Group();
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(0.45, 0.6, 32),
+          new THREE.MeshBasicMaterial({ color: 0xff3b6b, transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: false, depthTest: false }),
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.1;
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.06, 0.06, 3, 6),
+          new THREE.MeshBasicMaterial({ color: 0xff3b6b, transparent: true, opacity: 0.8, depthWrite: false }),
+        );
+        beam.position.y = 1.5;
+        const label = textSprite('BRO', '#ff3b6b', 26);
+        label.position.y = 3.3;
+        g.add(ring, beam, label);
+        g.position.set(px, 0, py);
+        this.scene.add(g);
+        this.blips.push({ g, born: performance.now(), life: lifeSec * 1000 });
+      }, delay);
+    }
+  }
+
+  /** Where a world position lands on screen, in CSS pixels. */
+  toScreen(x: number, y: number): { sx: number; sy: number; behind: boolean } {
+    const v = new THREE.Vector3(x, 0.5, y).project(this.camera);
+    return { sx: (v.x + 1) / 2 * window.innerWidth, sy: (1 - v.y) / 2 * window.innerHeight, behind: v.z > 1 };
   }
 
   zoomBy(d: number) { this.zoom = Math.max(0.55, Math.min(1.7, this.zoom + d)); }
@@ -788,11 +834,23 @@ export class Renderer {
 
     // ripples
     this.ripples = this.ripples.filter((r) => {
-      const age = (t - r.born) / 900;
+      const age = (t - r.born) / (r.life ?? 900);
       if (age >= 1) { r.mesh.removeFromParent(); r.mesh.geometry.dispose(); return false; }
       const s = 0.3 + age * r.r;
       r.mesh.scale.set(s, s, s);
-      (r.mesh.material as THREE.MeshBasicMaterial).opacity = 0.6 * (1 - age);
+      (r.mesh.material as THREE.MeshBasicMaterial).opacity = (r.mesh.userData.o ?? 0.6) * (1 - age);
+      return true;
+    });
+    this.blips = this.blips.filter((b) => {
+      const age = (t - b.born) / b.life;
+      if (age >= 1) { b.g.removeFromParent(); return false; }
+      const o = (1 - age) * (0.6 + 0.4 * Math.sin(t / 90));
+      b.g.traverse((c) => {
+        const m = (c as THREE.Mesh).material as THREE.Material | undefined;
+        if (m) { m.transparent = true; m.opacity = o; }
+      });
+      const s = 1 + Math.sin(t / 120) * 0.15;
+      b.g.children[0].scale.set(s, s, s);
       return true;
     });
     this.floaters = this.floaters.filter((f) => {
