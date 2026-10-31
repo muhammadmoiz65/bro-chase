@@ -1,7 +1,8 @@
 // DOM HUD: timer, kill feed, chat, Tab scoreboard, knock prompt, lobby panel.
 // Everything user-written is set with textContent, never innerHTML.
 
-import type { FeedItem, LobbyInfo, Phase, Role, ScoreRow, WorldEvents } from '../../shared/protocol.ts';
+import type { FeedItem, LobbyInfo, Phase, Role, ScoreRow, SelfView, WorldEvents } from '../../shared/protocol.ts';
+import { SHOP, type ShopId } from '../../shared/constants.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -61,9 +62,9 @@ export class Hud {
     }
   }
 
-  auraPop(d: number, why: string) {
+  auraPop(d: number, why: string, cash = false) {
     const box = $('aura-pops');
-    const pop = el('div', `aura-pop ${d >= 0 ? 'up' : 'down'}`, `${d >= 0 ? '+' : ''}${d} AURA`);
+    const pop = el('div', `aura-pop ${d >= 0 ? 'up' : 'down'}`, cash ? `${d >= 0 ? '+' : '-'}$${Math.abs(d)}` : `${d >= 0 ? '+' : ''}${d} AURA`);
     pop.appendChild(el('small', '', why));
     box.appendChild(pop);
     setTimeout(() => pop.remove(), 1900);
@@ -76,7 +77,91 @@ export class Hud {
     s.classList.toggle('on', on);
   }
 
+  wallet(you: SelfView) {
+    $('cash').textContent = `$${you.cash}`;
+    $('shop-cash').textContent = `$${you.cash}`;
+    for (const k of ['trap', 'drink', 'decoy', 'bribe'] as const) {
+      $(`inv-${k}`).textContent = String(you.inv[k]);
+      $(`inv-${k}`).parentElement!.classList.toggle('empty', you.inv[k] <= 0);
+    }
+    const fx: string[] = [];
+    if (you.drink) fx.push(`ENERGY DRINK ${you.drink}s`);
+    if (you.bribe) fx.push(`BRIBED ${you.bribe}s`);
+    $('effects').textContent = fx.join(' · ');
+    const bro = you.role === 'bro';
+    $('wallet').classList.toggle('hidden', !bro);
+    $('items').classList.toggle('hidden', !bro);
+    this.you = you;
+    if (this.shopOpen) this.renderShop();
+  }
+
+  private you: SelfView | null = null;
+  shopOpen = false;
+  onBuy: (id: ShopId) => void = () => {};
+
+  toggleShop(force?: boolean) {
+    this.shopOpen = force ?? !this.shopOpen;
+    $('shop').classList.toggle('hidden', !this.shopOpen);
+    if (this.shopOpen) this.renderShop();
+  }
+
+  private renderShop() {
+    const you = this.you;
+    if (!you) return;
+    const list = $('shop-list');
+    const rows: ShopId[] = ['armor', 'autorepair', 'trap', 'drink', 'decoy', 'bribe', 'aura'];
+    list.replaceChildren();
+    for (const id of rows) {
+      const def = SHOP[id];
+      let price: number | null;
+      let label = def.name;
+      if (id === 'armor') {
+        price = you.armor >= 3 ? null : (def.price as number[])[you.armor];
+        label = `${def.name} (level ${you.armor}/3)`;
+      } else if (id === 'autorepair') price = you.autorepair ? null : (def.price as number);
+      else price = def.price as number;
+      if (id in you.inv) label += ` (have ${you.inv[id as keyof SelfView['inv']]})`;
+      const row = el('div', 'shop-row');
+      const info = el('div', 'info');
+      info.appendChild(el('b', '', label));
+      info.appendChild(el('span', '', def.desc));
+      const btn = el('button', '', price === null ? 'OWNED' : `$${price}`) as HTMLButtonElement;
+      btn.disabled = price === null || you.cash < price || you.role !== 'bro';
+      btn.onclick = () => this.onBuy(id);
+      row.append(info, btn);
+      list.appendChild(row);
+    }
+  }
+
   toggleControls() { $('controls').classList.toggle('hidden'); }
+
+  private introTimer = 0;
+  /** Intro card for the first seconds of a session: what the game is and the controls. */
+  intro(sec = 12) {
+    const box = $('intro');
+    const bar = $('intro-bar').firstElementChild as HTMLElement;
+    box.classList.remove('hidden', 'fade');
+    bar.style.transition = 'none';
+    bar.style.width = '100%';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      bar.style.transition = `width ${sec}s linear`;
+      bar.style.width = '0%';
+    }));
+    clearTimeout(this.introTimer);
+    this.introTimer = window.setTimeout(() => this.closeIntro(), sec * 1000);
+    $('intro-close').onclick = () => this.closeIntro();
+  }
+
+  get introOpen() { return !$('intro').classList.contains('hidden') && !$('intro').classList.contains('fade'); }
+
+  closeIntro() {
+    const box = $('intro');
+    if (box.classList.contains('hidden')) return;
+    clearTimeout(this.introTimer);
+    box.classList.add('fade');
+    setTimeout(() => box.classList.add('hidden'), 500);
+    $('controls').classList.remove('hidden'); // keep a small controls card after the intro
+  }
 
   role(role: Role, npc: boolean) {
     const b = $('role-badge');

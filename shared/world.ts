@@ -18,6 +18,7 @@ export interface CribView {
   owner: string | null; // player id
   ownerName?: string;
   doors: [DoorState, DoorState];
+  max: number; // door max HP (armor level)
 }
 
 const spiralCache: Array<[number, number]> = [[0, 0]];

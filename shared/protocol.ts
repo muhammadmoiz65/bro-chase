@@ -1,6 +1,7 @@
 // Messages between the browser and the game server (JSON over WebSocket).
 
 import type { CribView, DoorSide } from './world.ts';
+import type { ItemId, ShopId } from './constants.ts';
 
 export type Role = 'bro' | 'collector';
 export type Phase = 'lobby' | 'pregame' | 'lockin' | 'touchgrass';
@@ -25,7 +26,15 @@ export interface SelfView {
   role: Role;
   aura: number;
   crib: number; // plot index of own crib, -1 for Bill Collectors
+  cash: number;
+  inv: Record<ItemId, number>;
+  armor: number; // crib door level 0..3
+  autorepair: boolean;
+  drink: number; // seconds left
+  bribe: number; // seconds left
 }
+
+export interface PropView { id: number; k: 'trap' | 'decoy'; x: number; y: number }
 
 export interface LobbyInfo {
   code: string;
@@ -58,9 +67,9 @@ export interface LobbyListing {
   quick: boolean;
 }
 
-export type NoiseKind = 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog';
+export type NoiseKind = 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog' | 'decoy';
 export interface NoiseView { id: number; x: number; y: number; r: number; k: NoiseKind }
-export interface DropView { id: number; x: number; y: number }
+export interface DropView { id: number; x: number; y: number; k: 'aura' | 'cash' }
 
 export interface ScoreRow {
   id: string;
@@ -94,6 +103,7 @@ export type ServerMsg =
       cribs?: CribView[]; // sent every few ticks
       noises: NoiseView[];
       drops?: DropView[];
+      props: PropView[];
       counts: { bros: number; alive: number; collectors: number };
       lobby: LobbyInfo;
       ev: WorldEvents;
@@ -105,12 +115,15 @@ export type ServerMsg =
   | { t: 'scores'; rows: ScoreRow[] }
   | { t: 'result'; win: boolean; night: number; mvp?: string }
   | { t: 'aura'; d: number; why: string }
+  | { t: 'cash'; d: number; why: string }
   | { t: 'ping'; at: number }
   | { t: 'kicked'; reason: string };
 
 export type ClientMsg =
   | { t: 'input'; dx: number; dy: number; zoom: boolean; sneak?: boolean }
   | { t: 'jump' }
+  | { t: 'buy'; item: ShopId }
+  | { t: 'item'; item: ItemId }
   | { t: 'light' } // toggle ring light
   | { t: 'use' } // open own door / knock / smash
   | { t: 'repair'; on: boolean }

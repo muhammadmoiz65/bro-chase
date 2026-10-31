@@ -114,12 +114,20 @@
       <input id="chat-input" class="hidden" maxlength="140" placeholder="say something (Enter to send, Esc to close)" />
     </div>
     <div id="bottom-left">
+      <div id="wallet"><span id="cash">$0</span> <button id="btn-shop" class="small">SHOP (B)</button></div>
+      <div id="items">
+        <div class="item" data-item="trap"><kbd>1</kbd> Banana <b id="inv-trap">0</b></div>
+        <div class="item" data-item="drink"><kbd>2</kbd> Drink <b id="inv-drink">0</b></div>
+        <div class="item" data-item="decoy"><kbd>3</kbd> Decoy <b id="inv-decoy">0</b></div>
+        <div class="item" data-item="bribe"><kbd>4</kbd> Bribe <b id="inv-bribe">0</b></div>
+      </div>
+      <div id="effects"></div>
       <div id="role-badge"></div>
       <div id="aura"><div id="aura-fill"></div><span id="aura-text">AURA 60</span></div>
     </div>
     <div id="hint"></div>
     <div id="aura-pops"></div>
-    <div id="controls">
+    <div id="controls" class="hidden">
       <div class="controls-head"><b>Controls</b><span class="muted small">H to hide</span></div>
       <div><kbd>WASD</kbd> move</div>
       <div><kbd>C</kbd> walk mode (quiet) <span id="walk-state" class="pill">OFF</span></div>
@@ -130,9 +138,36 @@
       <div><kbd>R</kbd> hold: repair / generator</div>
       <div><kbd>Y</kbd> <kbd>N</kbd> answer a knock</div>
       <div><kbd>+</kbd> <kbd>-</kbd> camera zoom</div>
+      <div><kbd>B</kbd> shop · <kbd>1</kbd>-<kbd>4</kbd> items</div>
       <div><kbd>Tab</kbd> scores · <kbd>Enter</kbd> chat</div>
     </div>
     <div id="mode-flash"></div>
+    <div id="shop" class="hidden">
+      <div class="row between"><h2>SHOP</h2><span id="shop-cash" class="shop-cash">$0</span></div>
+      <p class="muted small">Cash comes from street pickups, reviving, letting bros in, mogging, banana stuns and surviving the night. You keep it between nights.</p>
+      <div id="shop-list"></div>
+      <button id="shop-close" class="ghost small">Close (B / Esc)</button>
+    </div>
+    <div id="intro" class="hidden">
+      <h2>BRO CHASE</h2>
+      <p class="intro-lead">Survive the night. <b>Bill Collectors</b> are coming for what you owe.</p>
+      <ul class="intro-rules">
+        <li>Your <b>crib</b> has a front and a back door. Both stay <b>locked</b> unless you open them.</li>
+        <li>Bill Collectors are blind: they hunt by <b>sound</b>. Footsteps, sprinting and knocking give you away.</li>
+        <li>If one smashes in, run out the other door to a friend's crib and <b>knock</b>. They decide if you get in.</li>
+        <li>Grab <b>cash</b> and spend it in the <b>shop (B)</b>: stronger doors, banana peels, energy drinks, decoys, bribes.</li>
+        <li>Got collected? A living bro next to you for 3 seconds brings you back. Survive until the timer hits 0.</li>
+      </ul>
+      <div class="intro-keys">
+        <span><kbd>WASD</kbd> move</span><span><kbd>C</kbd> walk (quiet)</span><span><kbd>Shift</kbd> sprint (loud)</span>
+        <span><kbd>Space</kbd> jump</span><span><kbd>F</kbd> ring light</span><span><kbd>E</kbd> door / knock</span>
+        <span><kbd>R</kbd> repair</span><span><kbd>Y</kbd>/<kbd>N</kbd> answer knock</span><span><kbd>Tab</kbd> scores</span>
+        <span><kbd>Enter</kbd> chat</span><span><kbd>B</kbd> shop</span><span><kbd>1</kbd>-<kbd>4</kbd> items</span>
+        <span><kbd>H</kbd> controls</span><span><kbd>+</kbd>/<kbd>-</kbd> zoom</span>
+      </div>
+      <div id="intro-bar"><div></div></div>
+      <button id="intro-close" class="small">Got it (any key)</button>
+    </div>
     <div id="knock" class="hidden">
       <p id="knock-text"></p>
       <div id="knock-bar"><div></div></div>
@@ -171,6 +206,8 @@
         <button data-act="walk">WALK</button>
         <button data-act="score">TAB</button>
         <button data-act="chat">CHAT</button>
+        <button data-act="shop">SHOP</button>
+        <button data-act="item1">BANANA</button>
       </div>
     </div>
   </div>

@@ -86,3 +86,43 @@ export const EVENTS = {
 
 /** Aura rewards and penalties (shown as +/- popups). */
 export const AURA_DELTA = { revive: 20, letIn: 15, refuse: -10, generator: 25, mogBonus: 5 };
+
+/** Cash economy: earned during a match (kept between nights while you stay in the room). */
+export const CASH = {
+  start: 50,
+  drop: 25, // a cash pickup in the streets
+  perSecAlive: 0.5, // passive income during the night while not collected
+  revive: 40,
+  letIn: 25,
+  mog: 15,
+  generator: 30,
+  surviveNight: 100,
+  catch: 50, // player Bill Collectors
+  smash: 20,
+};
+
+export type ItemId = 'trap' | 'drink' | 'decoy' | 'bribe';
+export type ShopId = ItemId | 'armor' | 'autorepair' | 'aura';
+
+export const DOOR_LEVEL_HP = [100, 160, 230, 320];
+
+export const SHOP: Record<ShopId, { name: string; price: number | number[]; desc: string }> = {
+  armor: { name: 'Door armor', price: [120, 220, 350], desc: 'Both crib doors get more HP (3 levels).' },
+  autorepair: { name: 'Auto-repair', price: 200, desc: 'Your doors slowly fix themselves.' },
+  trap: { name: 'Banana peel', price: 60, desc: 'Drop it (1). A Bill Collector that steps on it is stunned 3s.' },
+  drink: { name: 'Energy drink', price: 50, desc: 'Use it (2). 40% faster for 8s.' },
+  decoy: { name: 'Decoy speaker', price: 70, desc: 'Drop it (3). Blasts noise for 7s to lure them away.' },
+  bribe: { name: 'Bribe', price: 150, desc: 'Use it (4). Bill Collectors ignore you for 8s.' },
+  aura: { name: 'Aura pack', price: 40, desc: '+40 aura right now.' },
+};
+
+export const ITEM = {
+  trapStunSec: 3,
+  drinkSec: 8,
+  drinkSpeed: 1.4,
+  decoySec: 7,
+  decoyNoise: 14,
+  bribeSec: 8,
+  autoRepairPerSec: 3,
+  maxTrapsPerPlayer: 4,
+};

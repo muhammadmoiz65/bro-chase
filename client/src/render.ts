@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { PLOT, RING_LIGHT_RANGE } from '../../shared/constants.ts';
 import { cellAt, doorCenter, plotCenter, type CribView } from '../../shared/world.ts';
-import type { DropView, EntView, WorldEvents } from '../../shared/protocol.ts';
+import type { DropView, EntView, PropView, WorldEvents } from '../../shared/protocol.ts';
 
 const CAM_OFFSET = new THREE.Vector3(0, 15, 10.5);
 const RING_POOL = 8;
@@ -104,6 +104,7 @@ export class Renderer {
   private bros = new Map<string, BroMesh>();
   private collectors = new Map<string, CollectorMesh>();
   private drops = new Map<number, THREE.Mesh>();
+  private props = new Map<number, THREE.Object3D>();
   private ripples: Array<{ mesh: THREE.Mesh; born: number; r: number }> = [];
   private seenNoise = new Set<number>();
   private floaters: Array<{ s: THREE.Sprite; born: number }> = [];
@@ -122,15 +123,16 @@ export class Renderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.35;
     container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 200);
-    this.scene.background = new THREE.Color(0x0a0c16);
-    this.scene.fog = new THREE.Fog(0x0a0c16, 24, 46);
+    this.scene.background = new THREE.Color(0x3a4a6e);
+    this.scene.fog = new THREE.Fog(0x3a4a6e, 40, 80);
 
-    this.hemi = new THREE.HemisphereLight(0x9fb0e8, 0x2a2a3a, 1.25);
+    this.hemi = new THREE.HemisphereLight(0xdfe8ff, 0x5a5a6a, 2.4);
     this.scene.add(this.hemi);
-    this.moon = new THREE.DirectionalLight(0xc8d2ff, 1.1);
+    this.moon = new THREE.DirectionalLight(0xfff2dd, 2.2);
     this.moon.position.set(-8, 20, -6);
     this.moon.castShadow = true;
     this.moon.shadow.mapSize.set(1024, 1024);
@@ -156,9 +158,9 @@ export class Renderer {
       this.scene.add(l);
     }
 
-    this.floorMatOn = new THREE.MeshStandardMaterial({ map: noiseTexture('#6b4a33', '#2b1c12', 300, true), emissive: 0x3a2412, emissiveIntensity: 0.6 });
-    this.floorMatOff = new THREE.MeshStandardMaterial({ map: noiseTexture('#5a4232', '#2b1c12', 300, true) });
-    this.floorMatMine = new THREE.MeshStandardMaterial({ map: noiseTexture('#5e4f80', '#2b2240', 300, true), emissive: 0x2b1d55, emissiveIntensity: 0.7 });
+    this.floorMatOn = new THREE.MeshStandardMaterial({ map: noiseTexture('#a87e58', '#6b4a33', 300, true) });
+    this.floorMatOff = new THREE.MeshStandardMaterial({ map: noiseTexture('#9a7452', '#6b4a33', 300, true) });
+    this.floorMatMine = new THREE.MeshStandardMaterial({ map: noiseTexture('#8f7cc4', '#5e4f80', 300, true) });
 
     this.scene.add(this.worldGroup);
     window.addEventListener('resize', () => this.resize());
@@ -183,7 +185,7 @@ export class Renderer {
     const span = hi - lo + 1;
 
     // ground
-    const groundTex = noiseTexture('#3a3f4c', '#1c1f27', 900);
+    const groundTex = noiseTexture('#6d7486', '#454b5a', 900);
     groundTex.repeat.set(span / 4, span / 4);
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(span, span),
@@ -213,7 +215,7 @@ export class Renderer {
       }
     }
 
-    const wallMat = new THREE.MeshStandardMaterial({ map: noiseTexture('#7a8098', '#3c4050', 500), roughness: 0.9 });
+    const wallMat = new THREE.MeshStandardMaterial({ map: noiseTexture('#b9a58c', '#8a765e', 500), roughness: 0.9 });
     const inst = (geo: THREE.BufferGeometry, mat: THREE.Material, cells: Array<[number, number]>, y: number) => {
       const m = new THREE.InstancedMesh(geo, mat, Math.max(1, cells.length));
       m.count = cells.length;
@@ -224,7 +226,7 @@ export class Renderer {
       this.worldGroup.add(m);
     };
     inst(new THREE.BoxGeometry(1, 1.5, 1), wallMat, walls, 0.75);
-    inst(new THREE.BoxGeometry(1, 2.4, 1), new THREE.MeshStandardMaterial({ color: 0x1a1c26 }), bounds, 1.2);
+    inst(new THREE.BoxGeometry(1, 2.4, 1), new THREE.MeshStandardMaterial({ color: 0x4a5062 }), bounds, 1.2);
     inst(new THREE.CylinderGeometry(0.35, 0.4, 2.2, 10), new THREE.MeshStandardMaterial({ color: 0x5b5f73 }), pillars, 1.1);
     const fenceMat = new THREE.MeshStandardMaterial({ color: 0x8a6a4a, roughness: 0.8 });
     inst(new THREE.BoxGeometry(1, 0.55, 0.12), fenceMat, fencesH, 0.3);
@@ -454,11 +456,16 @@ export class Renderer {
     return { group, armL, armR, chest, body };
   }
 
-  private makeDrop(): THREE.Mesh {
-    const m = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.2),
-      new THREE.MeshStandardMaterial({ color: 0xd9a0ff, emissive: 0xb46bff, emissiveIntensity: 1.6 }),
-    );
+  private makeDrop(k: 'aura' | 'cash' = 'aura'): THREE.Mesh {
+    const m = k === 'cash'
+      ? new THREE.Mesh(
+        new THREE.BoxGeometry(0.42, 0.06, 0.22),
+        new THREE.MeshStandardMaterial({ color: 0x5dff8a, emissive: 0x1f9a40, emissiveIntensity: 1.2 }),
+      )
+      : new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.2),
+        new THREE.MeshStandardMaterial({ color: 0xd9a0ff, emissive: 0xb46bff, emissiveIntensity: 1.6 }),
+      );
     m.position.y = 0.45;
     this.scene.add(m);
     return m;
@@ -477,11 +484,39 @@ export class Renderer {
     for (const d of drops) {
       seen.add(d.id);
       let m = this.drops.get(d.id);
-      if (!m) { m = this.makeDrop(); this.drops.set(d.id, m); }
+      if (!m) { m = this.makeDrop(d.k); this.drops.set(d.id, m); }
       m.position.x = d.x;
       m.position.z = d.y;
     }
     for (const [id, m] of this.drops) if (!seen.has(id)) { m.removeFromParent(); this.drops.delete(id); }
+  }
+
+  setProps(props: PropView[]) {
+    const seen = new Set<number>();
+    for (const p of props) {
+      seen.add(p.id);
+      if (this.props.has(p.id)) continue;
+      let o: THREE.Object3D;
+      if (p.k === 'trap') {
+        o = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.06, 6, 12, Math.PI), new THREE.MeshStandardMaterial({ color: 0xffe14a, emissive: 0x665500 }));
+        o.rotation.x = -Math.PI / 2;
+        o.position.set(p.x, 0.07, p.y);
+      } else {
+        const g = new THREE.Group();
+        const box = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.55, 0.35), new THREE.MeshStandardMaterial({ color: 0x222228 }));
+        box.position.y = 0.28;
+        const cone = new THREE.Mesh(new THREE.CircleGeometry(0.13, 16), new THREE.MeshStandardMaterial({ color: 0x888899, emissive: 0xff3b6b, emissiveIntensity: 0.8 }));
+        cone.position.set(0, 0.3, 0.18);
+        const label = textSprite('DECOY', '#ff3b6b', 28);
+        label.position.y = 0.9;
+        g.add(box, cone, label);
+        g.position.set(p.x, 0, p.y);
+        o = g;
+      }
+      this.scene.add(o);
+      this.props.set(p.id, o);
+    }
+    for (const [id, o] of this.props) if (!seen.has(id)) { o.removeFromParent(); this.props.delete(id); }
   }
 
   addNoise(id: number, x: number, y: number, r: number): boolean {
@@ -516,16 +551,19 @@ export class Renderer {
 
     // atmosphere
     const fog = this.scene.fog as THREE.Fog;
-    const near = ev.fog ? 6 : !ev.power ? 12 : monsterView ? 14 : 24;
-    const far = ev.fog ? 16 : !ev.power ? 26 : monsterView ? 30 : 46;
+    const near = ev.fog ? 6 : !ev.power ? 10 : monsterView ? 22 : 40;
+    const far = ev.fog ? 18 : !ev.power ? 24 : monsterView ? 45 : 80;
+    const bg = this.scene.background as THREE.Color;
+    bg.lerp(new THREE.Color(ev.fog ? 0x8a8f9e : !ev.power ? 0x06070c : 0x3a4a6e), 0.06);
+    fog.color.copy(bg);
     fog.near += (near - fog.near) * 0.05;
     fog.far += (far - fog.far) * 0.05;
     // smooth transitions between modes
-    const hemiTarget = !ev.power ? 0.35 : ev.disco ? 0.6 : 1.25;
+    const hemiTarget = !ev.power ? 0.3 : ev.disco ? 1.0 : 2.4;
     this.hemi.intensity += (hemiTarget - this.hemi.intensity) * 0.06;
-    const moonTarget = ev.power ? 1.1 : 0.35;
+    const moonTarget = ev.power ? 2.2 : 0.25;
     this.moon.intensity += (moonTarget - this.moon.intensity) * 0.06;
-    this.hemi.color.lerp(new THREE.Color(ev.rage ? 0xff8090 : 0x9fb0e8), 0.05);
+    this.hemi.color.lerp(new THREE.Color(ev.rage ? 0xff8090 : 0xdfe8ff), 0.05);
     this.disco.forEach((l, i) => {
       l.intensity = ev.disco ? 30 : 0;
       const a = t / 500 + (i * Math.PI * 2) / 3;

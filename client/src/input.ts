@@ -1,6 +1,6 @@
 // Keyboard + touch input. Emits a movement vector and discrete actions.
 
-export type Action = 'jump' | 'light' | 'use' | 'repairOn' | 'repairOff' | 'yes' | 'no' | 'scoreOn' | 'scoreOff' | 'chat' | 'zoomToggle' | 'walkToggle' | 'camIn' | 'camOut' | 'controls';
+export type Action = 'jump' | 'light' | 'use' | 'repairOn' | 'repairOff' | 'yes' | 'no' | 'scoreOn' | 'scoreOff' | 'chat' | 'zoomToggle' | 'walkToggle' | 'camIn' | 'camOut' | 'controls' | 'shop' | 'item1' | 'item2' | 'item3' | 'item4' | 'escape';
 
 export class Input {
   private keys = new Set<string>();
@@ -28,6 +28,9 @@ export class Input {
       else if (k === '=' || k === '+') this.onAction('camIn');
       else if (k === '-' || k === '_') this.onAction('camOut');
       else if (k === 'h') this.onAction('controls');
+      else if (k === 'b') this.onAction('shop');
+      else if (k === 'escape') this.onAction('escape');
+      else if (k === '1' || k === '2' || k === '3' || k === '4') this.onAction(`item${k}` as Action);
     });
     window.addEventListener('keyup', (e) => {
       const k = e.key.toLowerCase();
@@ -91,6 +94,8 @@ export class Input {
         else if (act === 'repair') this.onAction('repairOn');
         else if (act === 'score') this.onAction('scoreOn');
         else if (act === 'chat') this.onAction('chat');
+        else if (act === 'shop') this.onAction('shop');
+        else if (act === 'item1') this.onAction('item1');
         else if (act === 'zoom') { this.zoomLatch = !this.zoomLatch; b.classList.toggle('on', this.zoomLatch); }
         else if (act === 'walk') { this.sneakLatch = !this.sneakLatch; b.classList.toggle('on', this.sneakLatch); this.onAction('walkToggle'); }
       });

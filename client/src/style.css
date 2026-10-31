@@ -67,7 +67,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 
 /* ===== HUD ===== */
 #hud { position: fixed; inset: 0; pointer-events: none; }
-#hud button, #hud input, #knock, #lobby-panel, #touch, #scoreboard { pointer-events: auto; }
+#hud button, #hud input, #knock, #lobby-panel, #touch, #scoreboard, #shop { pointer-events: auto; }
 #top-bar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 2px 8px #000; }
 #phase { font-family: Bungee, Inter, sans-serif; font-size: 18px; color: var(--gold); letter-spacing: 0.06em; }
 #phase.lockin { color: var(--pink); }
@@ -87,7 +87,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .feed-item.event { background: rgba(255, 59, 107, 0.35); }
 @keyframes feedIn { from { transform: translateX(20px); opacity: 0; } }
 
-#chat { position: absolute; left: 12px; bottom: 96px; width: min(380px, calc(100vw - 24px)); }
+#chat { position: absolute; left: 12px; bottom: 210px; width: min(380px, calc(100vw - 24px)); }
 #chat-log { display: flex; flex-direction: column; gap: 2px; font-size: 13px; text-shadow: 0 1px 4px #000; }
 .chat-line { transition: opacity 1s; overflow-wrap: anywhere; }
 .chat-line .who { font-weight: 800; color: #7cc7ff; }
@@ -169,3 +169,34 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 #mode-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle, transparent 40%, rgba(255,59,107,.35)); transition: opacity .4s; }
 #mode-flash.on { opacity: 1; }
 @media (max-width: 760px) { #controls { display: none; } }
+
+#intro { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(620px, calc(100vw - 32px)); background: rgba(12, 13, 22, 0.9);
+  border: 1px solid var(--line); border-radius: 18px; padding: 20px 22px; pointer-events: auto; animation: introIn .4s ease-out; transition: opacity .5s; }
+#intro.fade { opacity: 0; }
+#intro h2 { font-family: Bungee, Inter, sans-serif; margin: 0; color: var(--pink); font-size: 30px; }
+.intro-lead { margin: 4px 0 10px; font-size: 16px; }
+.intro-lead b { color: var(--gold); }
+.intro-rules { margin: 0 0 12px; padding-left: 18px; line-height: 1.6; font-size: 14px; }
+.intro-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 10px; font-size: 13px; margin-bottom: 12px; }
+#intro-bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-bottom: 10px; }
+#intro-bar div { height: 100%; background: var(--pink); width: 100%; }
+@keyframes introIn { from { transform: translate(-50%, -46%); opacity: 0; } }
+@media (max-width: 760px) { .intro-keys { grid-template-columns: repeat(2, 1fr); } .intro-rules { font-size: 13px; } }
+
+#wallet { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+#cash { font-family: Bungee, Inter, sans-serif; font-size: 22px; color: #6dff9e; text-shadow: 0 2px 8px #000; }
+#items { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 6px; }
+.item { background: rgba(0,0,0,.55); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font-size: 11px; display: flex; gap: 4px; align-items: center; }
+.item b { margin-left: auto; color: var(--gold); }
+.item.empty { opacity: .45; }
+#effects { font-size: 12px; font-weight: 800; color: var(--gold); min-height: 0; margin-bottom: 4px; }
+#shop { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 80px); overflow-y: auto;
+  background: rgba(12, 13, 22, 0.96); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
+#shop h2 { font-family: Bungee, Inter, sans-serif; margin: 0; color: #6dff9e; }
+.shop-cash { font-family: Bungee, Inter, sans-serif; font-size: 22px; color: #6dff9e; }
+.shop-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+.shop-row .info { flex: 1; }
+.shop-row .info b { display: block; }
+.shop-row .info span { color: var(--muted); font-size: 12px; }
+.shop-row button { min-width: 92px; background: #2fbf63; }
+.shop-row button:disabled { background: #333; color: #777; cursor: default; }

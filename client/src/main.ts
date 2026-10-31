@@ -4,7 +4,7 @@ import { Renderer } from './render.ts';
 import { Hud } from './hud.ts';
 import { Input, type Action } from './input.ts';
 import { chant, sfx } from './audio.ts';
-import { DOOR, EVENTS, JUMP, SPEED } from '../../shared/constants.ts';
+import { EVENTS, ITEM, JUMP, SPEED } from '../../shared/constants.ts';
 import {
   cellAt, cribAtPos, dist, doorBlocks, doorCenter, GENERATOR_POS, move, overFence, type CribView, type DoorSide,
 } from '../../shared/world.ts';
@@ -49,6 +49,7 @@ class Game {
   npc = false;
   stunned = false;
   lightOn = false;
+  drink = 0;
   lastSent = '';
   lastSentAt = 0;
   scoresOpen = false;
@@ -94,7 +95,8 @@ class Game {
         this.myCrib = m.you.crib;
         hud.myName = account?.name ?? '';
         if (m.notice) hud.chat('server', 'bro', m.notice, true);
-        hud.chat('server', 'bro', 'Press Enter to chat, Tab for scores.', true);
+        hud.chat('server', 'bro', 'Press Enter to chat, Tab for scores, H for controls.', true);
+        hud.intro();
         break;
       case 'snap': this.onSnap(m); break;
       case 'feed':
@@ -116,6 +118,10 @@ class Game {
       case 'result':
         hud.result(m.win, m.mvp);
         if ((m.win && this.role === 'bro') || (!m.win && this.role === 'collector')) sfx.win(); else sfx.lose();
+        break;
+      case 'cash':
+        if (m.d) hud.auraPop(m.d, m.why, true);
+        if (m.d > 0) sfx.auraUp();
         break;
       case 'aura':
         hud.auraPop(m.d, m.why);
@@ -140,6 +146,9 @@ class Game {
     this.role = m.you.role;
     this.myCrib = m.you.crib;
     this.aura = m.you.aura;
+    hud.wallet(m.you);
+    this.drink = m.you.drink;
+    renderer.setProps(m.props);
     if (m.R !== this.R || !this.me.init) { this.R = m.R; renderer.buildWorld(m.R); }
     if (m.cribs) {
       this.cribs = new Map(m.cribs.map((c) => [c.i, c]));
@@ -205,6 +214,12 @@ class Game {
       case 'camIn': renderer.zoomBy(-0.12); break;
       case 'camOut': renderer.zoomBy(0.12); break;
       case 'controls': hud.toggleControls(); break;
+      case 'shop': hud.toggleShop(); break;
+      case 'escape': hud.toggleShop(false); break;
+      case 'item1': this.send({ t: 'item', item: 'trap' }); break;
+      case 'item2': this.send({ t: 'item', item: 'drink' }); break;
+      case 'item3': this.send({ t: 'item', item: 'decoy' }); break;
+      case 'item4': this.send({ t: 'item', item: 'bribe' }); break;
       case 'use': this.send({ t: 'use' }); break;
       case 'repairOn': this.send({ t: 'repair', on: true }); break;
       case 'repairOff': this.send({ t: 'repair', on: false }); break;
@@ -269,7 +284,7 @@ class Game {
     let sp: number;
     if (this.role === 'collector') {
       sp = this.phase === 'lockin' ? SPEED.monsterPlayer * (this.ev.rage ? EVENTS.rageSpeed : 1) * (this.ev.power ? 1 : 1.1) : SPEED.walk;
-    } else sp = this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : mv.sneak ? SPEED.sneak : SPEED.walk;
+    } else sp = (this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : mv.sneak ? SPEED.sneak : SPEED.walk) * (this.drink > 0 && !this.npc ? ITEM.drinkSpeed : 1);
     if (mv.dx || mv.dy) {
       [me.x, me.y] = move(me.x, me.y, mv.dx * sp * dt, mv.dy * sp * dt, this.R, this.doors, { ghost: this.npc, airborne: me.jumpT > 0 });
     }
@@ -297,7 +312,7 @@ class Game {
       const c = this.cribs.get(best.plot)!;
       const d = c.doors[best.side];
       if (c.i === this.myCrib) {
-        if (d.hp < DOOR.maxHp) return `Hold R: repair your ${sideName(best.side)} door (${d.hp}%)  ·  E: open it`;
+        if (d.hp < c.max) return `Hold R: repair your ${sideName(best.side)} door (${d.hp}/${c.max})  ·  E: open it`;
         return d.open ? 'Your door is open. It closes by itself.' : `E: open your ${sideName(best.side)} door`;
       }
       if (doorBlocks(d)) return `E: knock on ${c.ownerName}'s ${sideName(best.side)} door`;
@@ -347,7 +362,10 @@ class Game {
   private lastFrame = 0;
 }
 
-input.onAction = (a) => game?.action(a);
+input.onAction = (a) => {
+  if (hud.introOpen && a !== 'scoreOff' && a !== 'repairOff') hud.closeIntro();
+  game?.action(a);
+};
 $('chat-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); game?.action('chat'); }
   if (e.key === 'Escape') { hud.closeChat(); input.enabled = true; }
@@ -553,6 +571,9 @@ $('btn-logout').onclick = async () => {
 
 // ----- HUD wiring -----
 $('btn-leave').onclick = () => { game?.leave(); showMenu(); };
+$('btn-shop').onclick = () => hud.toggleShop();
+$('shop-close').onclick = () => hud.toggleShop(false);
+hud.onBuy = (item) => game?.send({ t: 'buy', item });
 $('btn-start').onclick = () => game?.send({ t: 'start' });
 $('btn-role-bro').onclick = () => game?.send({ t: 'role', role: 'bro' });
 $('btn-role-six').onclick = () => game?.send({ t: 'role', role: 'collector' });

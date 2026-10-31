@@ -4,11 +4,11 @@
 
 import type { WebSocket } from 'ws';
 import {
-  AURA, AURA_DELTA, BROS_PER_MONSTER, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
+  AURA, AURA_DELTA, BROS_PER_MONSTER, CASH, DOOR_LEVEL_HP, ITEM, SHOP, type ItemId, type ShopId, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
   PHASE_SEC, PLOT, RECONNECT_GRACE_SEC, REVIVE_RANGE, REVIVE_SEC, RING_LIGHT_RANGE, SPEED, TICK_RATE, VISION,
 } from '../shared/constants.ts';
 import type {
-  ClientMsg, DropView, EntView, FeedItem, LobbyInfo, ModeName, NoiseKind, NoiseView, Phase, Role, ScoreRow, SelfView, ServerMsg,
+  ClientMsg, DropView, EntView, FeedItem, LobbyInfo, ModeName, NoiseKind, NoiseView, Phase, PropView, Role, ScoreRow, SelfView, ServerMsg,
 } from '../shared/protocol.ts';
 import {
   cellAt, cribSpawn, dist, doorBlocks, doorCells, doorCenter, GENERATOR_POS, move, overFence, plotCenter,
@@ -24,7 +24,7 @@ export interface Hooks {
 }
 
 interface Door extends DoorState { openUntil: number }
-interface Crib { owner: string | null; ownerName?: string; doors: [Door, Door] }
+interface Crib { owner: string | null; ownerName?: string; doors: [Door, Door]; level: number; autorepair: boolean }
 
 interface RoundStats { score: number; catches: number; mogs: number; revives: number; letIns: number; caught: number }
 const freshStats = (): RoundStats => ({ score: 0, catches: 0, mogs: 0, revives: 0, letIns: 0, caught: 0 });
@@ -46,6 +46,11 @@ interface Player {
   repairing: boolean;
   rv: number;
   hue: number;
+  cash: number;
+  inv: Record<ItemId, number>;
+  drinkUntil: number;
+  bribeUntil: number;
+  cashT: number;
   stats: RoundStats;
   ping: number;
   stepT: number; repairNoiseT: number; smashCd: number;
@@ -90,7 +95,8 @@ export class Room {
   phaseEnd = 0;
   night = 0;
   noises: Noise[] = [];
-  drops: Array<{ id: number; x: number; y: number }> = [];
+  drops: Array<{ id: number; x: number; y: number; k: 'aura' | 'cash' }> = [];
+  props: Array<{ id: number; k: 'trap' | 'decoy'; x: number; y: number; owner: string; until: number; noiseT: number }> = [];
   knocks = new Map<number, Knock>();
   feed: FeedItem[] = [];
   ev = { power: true, powerWork: 0, mode: null as ModeName | null, modeEnd: 0, nextAt: 0 };
@@ -157,7 +163,8 @@ export class Room {
       p = {
         id: accountId, name, role, ws, leftAt: 0, x: 0, y: 0, npc: false, light: false, aura: AURA.start,
         input: { dx: 0, dy: 0, zoom: false, sneak: false }, jumpT: 0, jumpCd: 0, crib: -1, stunUntil: 0, stunFrom: [0, 0],
-        repairing: false, rv: 0, hue: hueOf(accountId), stats: freshStats(), ping: 0, stepT: 0,
+        repairing: false, rv: 0, hue: hueOf(accountId), cash: CASH.start, inv: { trap: 0, drink: 0, decoy: 0, bribe: 0 },
+        drinkUntil: 0, bribeUntil: 0, cashT: 0, stats: freshStats(), ping: 0, stepT: 0,
         repairNoiseT: 0, smashCd: 0, chatTimes: [],
       };
       this.players.set(accountId, p);
@@ -198,7 +205,7 @@ export class Room {
     let i = 1;
     while (this.cribs.get(i)?.owner) i++;
     const fresh = (): Door => ({ hp: DOOR.maxHp, open: false, openUntil: 0 });
-    this.cribs.set(i, { owner: p.id, ownerName: p.name, doors: [fresh(), fresh()] });
+    this.cribs.set(i, { owner: p.id, ownerName: p.name, doors: [fresh(), fresh()], level: 0, autorepair: false });
     p.crib = i;
     this.R = Math.max(this.R, ringFor(i + 1));
   }
@@ -270,6 +277,8 @@ export class Room {
         if (p.role === 'bro' && !p.npc) p.light = !p.light && p.aura > 0;
         break;
       case 'use': this.use(p); break;
+      case 'buy': this.buy(p, msg.item); break;
+      case 'item': this.useItem(p, msg.item); break;
       case 'repair': p.repairing = !!msg.on; break;
       case 'answer': this.answer(p, Number(msg.id), !!msg.ok); break;
       case 'chat': this.chat(p, msg.text); break;
@@ -368,6 +377,7 @@ export class Room {
       owner.stats.letIns++;
       owner.stats.score += 5;
       this.auraDelta(owner, AURA_DELTA.letIn, 'let a bro in');
+      this.cashDelta(owner, CASH.letIn, 'let a bro in');
       if (from) this.feed.push({ k: 'letin', a: owner.name, b: from.name });
     } else if (from) {
       this.auraDelta(owner, AURA_DELTA.refuse, 'left a bro outside');
@@ -399,6 +409,71 @@ export class Room {
     this.noises.push({ id: noiseSeq++, x, y, r, t: now(), src, k });
   }
 
+  private cashDelta(p: Player, d: number, why: string, quiet = false) {
+    p.cash = Math.max(0, Math.round(p.cash + d));
+    if (!quiet) this.sendTo(p, { t: 'cash', d: Math.round(d), why });
+  }
+
+  private buy(p: Player, item: ShopId) {
+    const def = SHOP[item];
+    if (!def || p.role !== 'bro') return;
+    const crib = p.crib >= 0 ? this.cribs.get(p.crib) : undefined;
+    let price: number;
+    if (item === 'armor') {
+      if (!crib || crib.level >= 3) return this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', sys: true, text: 'Your doors are already max armor.' });
+      price = (def.price as number[])[crib.level];
+    } else if (item === 'autorepair') {
+      if (!crib || crib.autorepair) return;
+      price = def.price as number;
+    } else price = def.price as number;
+    if (p.cash < price) return this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', sys: true, text: `Not enough cash: ${def.name} costs $${price}.` });
+    this.cashDelta(p, -price, def.name);
+    if (item === 'armor') {
+      crib!.level++;
+      const max = DOOR_LEVEL_HP[crib!.level];
+      for (const d of crib!.doors) if (d.hp > 0) d.hp = Math.min(max, d.hp + (max - DOOR_LEVEL_HP[crib!.level - 1]));
+    } else if (item === 'autorepair') crib!.autorepair = true;
+    else if (item === 'aura') this.auraDelta(p, 40, 'aura pack');
+    else p.inv[item]++;
+  }
+
+  private useItem(p: Player, item: ItemId) {
+    if (p.role !== 'bro' || p.npc || !(item in p.inv) || p.inv[item] <= 0) return;
+    const t = now();
+    if (item === 'trap') {
+      if (this.props.filter((x) => x.k === 'trap' && x.owner === p.id).length >= ITEM.maxTrapsPerPlayer) {
+        return this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', sys: true, text: `Max ${ITEM.maxTrapsPerPlayer} banana peels down at once.` });
+      }
+      this.props.push({ id: dropSeq++, k: 'trap', x: p.x, y: p.y, owner: p.id, until: Infinity, noiseT: 0 });
+    } else if (item === 'decoy') {
+      this.props.push({ id: dropSeq++, k: 'decoy', x: p.x, y: p.y, owner: p.id, until: t + ITEM.decoySec, noiseT: 0 });
+    } else if (item === 'drink') p.drinkUntil = t + ITEM.drinkSec;
+    else if (item === 'bribe') {
+      p.bribeUntil = t + ITEM.bribeSec;
+      this.feed.push({ k: 'info', text: `${p.name} paid off the Bill Collectors (for now).` });
+    }
+    p.inv[item]--;
+  }
+
+  private stepProps(t: number) {
+    this.props = this.props.filter((pr) => t < pr.until);
+    const hunters: Array<{ x: number; y: number; name: string; stunUntil: number; stunFrom: [number, number] }> = [...this.ais, ...this.collectorPlayers];
+    for (const pr of [...this.props]) {
+      if (pr.k === 'decoy') {
+        if ((pr.noiseT -= DT) <= 0) { pr.noiseT = 0.8; this.noise(pr.x, pr.y, ITEM.decoyNoise, null, 'decoy'); }
+        continue;
+      }
+      const h = hunters.find((m) => t >= m.stunUntil && dist(m.x, m.y, pr.x, pr.y) < 0.7);
+      if (!h) continue;
+      h.stunUntil = t + ITEM.trapStunSec;
+      h.stunFrom = [pr.x, pr.y];
+      this.props.splice(this.props.indexOf(pr), 1);
+      const owner = this.players.get(pr.owner);
+      this.feed.push({ k: 'info', text: `${h.name} slipped on ${owner ? owner.name + "'s" : 'a'} banana peel` });
+      if (owner) { owner.stats.score += 10; this.cashDelta(owner, CASH.mog, 'banana stun'); }
+    }
+  }
+
   private auraDelta(p: Player, d: number, why: string) {
     const before = p.aura;
     p.aura = Math.max(0, Math.min(AURA.max, p.aura + d));
@@ -418,6 +493,8 @@ export class Room {
     if (d.hp === 0) {
       d.open = false;
       stats.score += 5;
+      const smasher = [...this.players.values()].find((q) => q.name === by && q.role === 'collector');
+      if (smasher) this.cashDelta(smasher, CASH.smash, 'smashed a door');
       this.feed.push({ k: 'smash', a: by, b: `${c.ownerName}'s ${side === 0 ? 'front' : 'back'} door` });
     }
   }
@@ -457,12 +534,15 @@ export class Room {
         this.systemChat(`${p.name} is back to being a bro (not enough bros for another Bill Collector).`);
       }
     }
-    for (const c of this.cribs.values()) for (const d of c.doors) { d.hp = DOOR.maxHp; d.open = false; d.openUntil = 0; }
+    this.props = [];
+    for (const c of this.cribs.values()) for (const d of c.doors) { d.hp = DOOR_LEVEL_HP[c.level]; d.open = false; d.openUntil = 0; }
     for (const p of this.players.values()) {
       this.spawn(p);
       p.aura = AURA.start;
       p.stats = freshStats();
       p.jumpT = 0;
+      p.drinkUntil = 0;
+      p.bribeUntil = 0;
     }
   }
 
@@ -476,6 +556,7 @@ export class Room {
         this.hooks.onStats(p.id, { nights: 1, wins: win ? 0 : 1, catches: p.stats.catches });
       }
     }
+    if (win) for (const p of this.bros) if (!p.npc) this.cashDelta(p, CASH.surviveNight, 'survived the night');
     this.broadcast({ t: 'result', win, night: this.night, mvp });
     this.broadcast({ t: 'scores', rows: this.scoreRows() });
     this.feed.push({ k: 'info', text: win ? 'W. The bros touched grass.' : 'L + ratio. The Bill Collectors won.' });
@@ -517,6 +598,7 @@ export class Room {
     if (this.phase === 'lockin') this.stepAis(t);
     this.stepDoors(t);
     this.stepDrops(t);
+    this.stepProps(t);
     this.stepKnocks(t);
     this.noises = this.noises.filter((n) => t - n.t < NOISE.lifeSec);
 
@@ -553,7 +635,7 @@ export class Room {
     if (pick === 'aurarain') {
       for (let i = 0; i < EVENTS.auraRainDrops; i++) {
         const [x, y] = this.randomStreet();
-        this.drops.push({ id: dropSeq++, x, y });
+        this.drops.push({ id: dropSeq++, x, y, k: 'aura' });
       }
       this.feed.push({ k: 'event', text: 'AURA RAIN! Free aura in the streets.' });
       return;
@@ -585,6 +667,7 @@ export class Room {
     if (by) {
       by.stats.score += 10;
       this.auraDelta(by, AURA_DELTA.generator, 'fixed the generator');
+      this.cashDelta(by, CASH.generator, 'fixed the generator');
       this.feed.push({ k: 'event', text: `${by.name} fixed the generator. Power's back.` });
     } else {
       this.feed.push({ k: 'event', text: 'Power came back on.' });
@@ -629,7 +712,7 @@ export class Room {
       }
       const airborne = p.jumpT > 0;
       const sneak = p.input.sneak;
-      const sp = zoom ? SPEED.zoom : sneak ? SPEED.sneak : SPEED.walk;
+      const sp = (zoom ? SPEED.zoom : sneak ? SPEED.sneak : SPEED.walk) * (t < p.drinkUntil ? ITEM.drinkSpeed : 1);
       if (moving) {
         [p.x, p.y] = move(p.x, p.y, dx * sp * DT, dy * sp * DT, this.R, this.doorLookup, { airborne });
         if ((p.stepT -= DT) <= 0 && !airborne) {
@@ -644,6 +727,20 @@ export class Room {
       if (p.repairing) this.repair(p, t);
     }
 
+    // passive income for staying alive through the night
+    if (this.phase === 'lockin') {
+      for (const p of this.bros) {
+        if (p.npc) continue;
+        p.cashT += DT * CASH.perSecAlive;
+        if (p.cashT >= 1) { const whole = Math.floor(p.cashT); p.cashT -= whole; this.cashDelta(p, whole, '', true); }
+      }
+    }
+    for (const c of this.cribs.values()) {
+      if (!c.autorepair) continue;
+      const max = DOOR_LEVEL_HP[c.level];
+      for (const d of c.doors) if (d.hp > 0 && d.hp < max) d.hp = Math.min(max, d.hp + ITEM.autoRepairPerSec * DT);
+    }
+
     // revive NPCs that have a living bro standing next to them
     for (const p of this.players.values()) {
       if (!p.npc) continue;
@@ -656,6 +753,7 @@ export class Room {
           helper.stats.revives++;
           helper.stats.score += 15;
           this.auraDelta(helper, AURA_DELTA.revive, 'revived a bro');
+          this.cashDelta(helper, CASH.revive, 'revived a bro');
           this.feed.push({ k: 'revive', a: helper.name, b: p.name });
         }
       } else {
@@ -678,9 +776,10 @@ export class Room {
     for (const side of [0, 1] as DoorSide[]) {
       const [dx, dy] = doorCenter(p.crib, side);
       const d = crib.doors[side];
-      if (dist(p.x, p.y, dx, dy) < 1.9 && d.hp < DOOR.maxHp) {
+      const max = DOOR_LEVEL_HP[crib.level];
+      if (dist(p.x, p.y, dx, dy) < 1.9 && d.hp < max) {
         const was = d.hp;
-        d.hp = Math.min(DOOR.maxHp, d.hp + DOOR.repairPerSec * DT);
+        d.hp = Math.min(max, d.hp + DOOR.repairPerSec * DT);
         if (was <= 0) { d.open = false; d.openUntil = 0; }
         p.stats.score += (d.hp - was) / 20;
         this.makeRepairNoise(p);
@@ -705,6 +804,7 @@ export class Room {
         h.stunUntil = t + MOG_STUN_SEC;
         h.stunFrom = [b.x, b.y];
         this.auraDelta(b, -AURA.mogCost + AURA_DELTA.mogBonus, 'ring light mog');
+        this.cashDelta(b, CASH.mog, 'mogged a Bill Collector');
         if (b.aura <= 0) b.light = false;
         b.stats.mogs++;
         b.stats.score += 10;
@@ -714,7 +814,7 @@ export class Room {
       }
     }
     for (const b of this.bros) {
-      if (b.npc || b.jumpT > 0) continue; // a mid-air bro can't be grabbed
+      if (b.npc || b.jumpT > 0 || t < b.bribeUntil) continue; // mid-air or bribed bros can't be grabbed
       if (dist(h.x, h.y, b.x, b.y) < CATCH_RANGE) {
         b.npc = true;
         b.light = false;
@@ -723,6 +823,8 @@ export class Room {
         b.stats.caught++;
         h.stats.catches++;
         h.stats.score += 20;
+        const hp = this.players.get((h as { id?: string }).id ?? '');
+        if (hp) this.cashDelta(hp, CASH.catch, 'collected a bro');
         this.feed.push({ k: 'caught', a: h.name, b: b.name });
         this.knocksFrom(b.id);
       }
@@ -759,7 +861,7 @@ export class Room {
 
   private planAi(ai: Ai, t: number) {
     ai.replanAt = t + 0.4;
-    const alive = this.bros.filter((b) => !b.npc);
+    const alive = this.bros.filter((b) => !b.npc && t >= b.bribeUntil);
     let goal: [number, number] | null = null;
 
     // 1. something right next to it
@@ -777,14 +879,14 @@ export class Room {
           bestScore = score;
           goal = [n.x, n.y];
           const src = n.src ? this.players.get(n.src) : undefined;
-          if (src && src.role === 'bro' && !src.npc) { ai.chase = src.id; ai.chaseUntil = t + 2.5; }
+          if (src && src.role === 'bro' && !src.npc && t >= src.bribeUntil) { ai.chase = src.id; ai.chaseUntil = t + 2.5; }
         }
       }
     }
 
     if (ai.chase && t < ai.chaseUntil) {
       const b = this.players.get(ai.chase);
-      if (b && !b.npc) goal = [b.x, b.y];
+      if (b && !b.npc && t >= b.bribeUntil) goal = [b.x, b.y];
       else ai.chase = null;
     }
 
@@ -852,15 +954,16 @@ export class Room {
       this.dropT = 5;
       if (this.drops.length < target) {
         const [x, y] = this.randomStreet();
-        this.drops.push({ id: dropSeq++, x, y });
+        this.drops.push({ id: dropSeq++, x, y, k: Math.random() < 0.5 ? 'cash' : 'aura' });
       }
     }
     for (const b of this.bros) {
-      if (b.npc || b.aura >= AURA.max) continue;
-      const i = this.drops.findIndex((d) => dist(d.x, d.y, b.x, b.y) < 0.8);
+      if (b.npc) continue;
+      const i = this.drops.findIndex((d) => dist(d.x, d.y, b.x, b.y) < 0.8 && (d.k === 'cash' || b.aura < AURA.max));
       if (i >= 0) {
-        this.drops.splice(i, 1);
-        this.auraDelta(b, AURA.drop, 'aura drop');
+        const d = this.drops.splice(i, 1)[0];
+        if (d.k === 'cash') this.cashDelta(b, CASH.drop, 'cash pickup');
+        else this.auraDelta(b, AURA.drop, 'aura drop');
       }
     }
   }
@@ -879,7 +982,13 @@ export class Room {
   // ---------- views ----------
 
   private selfView(p: Player): SelfView {
-    return { id: p.id, role: p.role, aura: Math.round(p.aura), crib: p.crib };
+    const crib = p.crib >= 0 ? this.cribs.get(p.crib) : undefined;
+    const t = now();
+    return {
+      id: p.id, role: p.role, aura: Math.round(p.aura), crib: p.crib, cash: p.cash, inv: { ...p.inv },
+      armor: crib?.level ?? 0, autorepair: !!crib?.autorepair,
+      drink: Math.max(0, Math.ceil(p.drinkUntil - t)), bribe: Math.max(0, Math.ceil(p.bribeUntil - t)),
+    };
   }
 
   private lobbyInfo(): LobbyInfo {
@@ -907,7 +1016,7 @@ export class Room {
     for (const [i, c] of this.cribs) {
       if (!c.owner) continue;
       out.push({
-        i, owner: c.owner, ownerName: c.ownerName,
+        i, owner: c.owner, ownerName: c.ownerName, max: DOOR_LEVEL_HP[c.level],
         doors: [
           { hp: Math.round(c.doors[0].hp), open: c.doors[0].open },
           { hp: Math.round(c.doors[1].hp), open: c.doors[1].open },
@@ -973,11 +1082,14 @@ export class Room {
         .filter((n) => dist(n.x, n.y, p.x, p.y) < INTEREST_RADIUS)
         .map((n) => ({ id: n.id, x: +n.x.toFixed(1), y: +n.y.toFixed(1), r: n.r, k: n.k }));
       const drops: DropView[] | undefined = sendDrops && !monster
-        ? this.drops.filter((d) => dist(d.x, d.y, p.x, p.y) < INTEREST_RADIUS)
+        ? this.drops.filter((d) => dist(d.x, d.y, p.x, p.y) < INTEREST_RADIUS).map((d) => ({ id: d.id, x: d.x, y: d.y, k: d.k }))
         : sendDrops ? [] : undefined;
       this.sendTo(p, {
         t: 'snap', now: Date.now(), phase: this.phase, phaseEnd: Math.round(this.phaseEnd * 1000), R: this.R, night: this.night,
         you: this.selfView(p), ents, cribs, noises, drops, counts, lobby, ev,
+        props: this.props
+          .filter((pr) => dist(pr.x, pr.y, p.x, p.y) < INTEREST_RADIUS && (!monster || pr.k === 'decoy'))
+          .map((pr): PropView => ({ id: pr.id, k: pr.k, x: +pr.x.toFixed(2), y: +pr.y.toFixed(2) })),
       });
     }
   }
