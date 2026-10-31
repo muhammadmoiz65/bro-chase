@@ -7,6 +7,7 @@ import { applyGear, makeDefence, makeDoor, tickUpgrades } from './upgrades.ts';
 import { cellAt, doorCenter, plotCenter, ventsFor, type CribView } from '../../shared/world.ts';
 import type { DefView, DropView, EntView, PropView, WorldEvents } from '../../shared/protocol.ts';
 import { FX } from './fx/index.ts';
+import { addWallCaps, brickTexture, dressWorld } from './fx/world.ts';
 import { DEFAULT_LOOK, parseLook } from '../../shared/look.ts';
 import { buildAvatar, type Avatar } from './avatar.ts';
 
@@ -160,6 +161,7 @@ export class Renderer {
   private seenNoise = new Set<number>();
   private floaters: Array<{ s: THREE.Sprite; born: number }> = [];
   private target = new THREE.Vector3();
+  private tmpColor = new THREE.Color();
   private clock = new THREE.Clock();
   private power = true;
   private zoom = 1;
@@ -176,10 +178,10 @@ export class Renderer {
     container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 200);
-    this.scene.background = new THREE.Color(0x3a4a6e);
-    this.scene.fog = new THREE.Fog(0x3a4a6e, 40, 80);
+    this.scene.background = new THREE.Color(0xa9c8de);
+    this.scene.fog = new THREE.Fog(0xa9c8de, 40, 80);
 
-    this.hemi = new THREE.HemisphereLight(0xdfe8ff, 0x5a5a6a, 2.4);
+    this.hemi = new THREE.HemisphereLight(0xdfe8ff, 0x6b7458, 2.4);
     this.scene.add(this.hemi);
     this.moon = new THREE.DirectionalLight(0xfff2dd, 2.2);
     this.moon.position.set(-8, 20, -6);
@@ -228,17 +230,8 @@ export class Renderer {
     const hi = R * PLOT + PLOT / 2 - 1;
     const span = hi - lo + 1;
 
-    // ground
-    const groundTex = noiseTexture('#6d7486', '#454b5a', 900);
-    groundTex.repeat.set(span / 4, span / 4);
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(span, span),
-      new THREE.MeshStandardMaterial({ map: groundTex, roughness: 1 }),
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.set(lo + span / 2, 0, lo + span / 2);
-    ground.receiveShadow = true;
-    this.worldGroup.add(ground);
+    // ground: roads, sidewalks, yards, plaza, trees (fx/world.ts)
+    dressWorld(this.worldGroup, R, this.renderer);
 
     const walls: Array<[number, number]> = [];
     const wallPlots: number[] = [];
@@ -260,7 +253,7 @@ export class Renderer {
       }
     }
 
-    const wallMat = new THREE.MeshStandardMaterial({ map: noiseTexture('#f2f2f2', '#c4c4c4', 500), roughness: 0.9 });
+    const wallMat = new THREE.MeshStandardMaterial({ map: brickTexture(), roughness: 0.88 });
     const inst = (geo: THREE.BufferGeometry, mat: THREE.Material, cells: Array<[number, number]>, y: number) => {
       const m = new THREE.InstancedMesh(geo, mat, Math.max(1, cells.length));
       m.count = cells.length;
@@ -269,6 +262,7 @@ export class Renderer {
       m.castShadow = true;
       m.receiveShadow = true;
       this.worldGroup.add(m);
+      addWallCaps(this.worldGroup, m);
     };
     {
       // every crib gets its own look: wall colour, wall height, floor and door paint
@@ -339,7 +333,7 @@ export class Renderer {
       const [cx, cy] = plotCenter(i);
       const f = new THREE.Mesh(floorGeo, this.floorMat(cribStyle(i).floor));
       f.rotation.x = -Math.PI / 2;
-      f.position.set(cx, 0.01, cy);
+      f.position.set(cx, 0.03, cy);
       f.receiveShadow = true;
       this.cribFloors.set(i, f);
       this.worldGroup.add(f);
@@ -780,7 +774,7 @@ export class Renderer {
     const near = ev.fog ? 6 : !ev.power ? 10 : monsterView ? 22 : 40;
     const far = ev.fog ? 18 : !ev.power ? 24 : monsterView ? 45 : 80;
     const bg = this.scene.background as THREE.Color;
-    bg.lerp(new THREE.Color(ev.fog ? 0x8a8f9e : !ev.power ? 0x06070c : 0x3a4a6e), 0.06);
+    bg.lerp(this.tmpColor.setHex(ev.fog ? 0x9aa0ab : !ev.power ? 0x06070c : 0xa9c8de), 0.06);
     fog.color.copy(bg);
     fog.near += (near - fog.near) * 0.05;
     fog.far += (far - fog.far) * 0.05;
@@ -789,10 +783,10 @@ export class Renderer {
     this.hemi.intensity += (hemiTarget - this.hemi.intensity) * 0.06;
     const moonTarget = ev.power ? 2.2 : 0.25;
     this.moon.intensity += (moonTarget - this.moon.intensity) * 0.06;
-    this.hemi.color.lerp(new THREE.Color(ev.rage ? 0xff8090 : 0xdfe8ff), 0.05);
+    this.hemi.color.lerp(this.tmpColor.setHex(ev.rage ? 0xff8090 : 0xdfe8ff), 0.05);
     this.lampHeadMat.emissiveIntensity = ev.power ? 2 : 0.05;
     // street lamps light the ground with cheap glow decals instead of real lights
-    this.lampPoolMat.opacity += ((ev.power ? 0.55 : 0) - this.lampPoolMat.opacity) * 0.08;
+    this.lampPoolMat.opacity += ((ev.power ? 0.16 : 0) - this.lampPoolMat.opacity) * 0.08;
 
     // doors glide to their target height
     for (const d of this.doors.values()) {
