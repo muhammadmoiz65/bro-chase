@@ -4,6 +4,9 @@
 import type { FeedItem, LobbyInfo, Phase, Role, ScoreRow, SelfView, WorldEvents } from '../../shared/protocol.ts';
 import { DEF, DEF_KINDS, DEFENCE, GEAR, MONSTER, VENT, SHOP, type DefKind, type ShopId } from '../../shared/constants.ts';
 
+/** Only touch the DOM when text actually changes (these run every frame). */
+function setText(e: HTMLElement, text: string) { if (e.textContent !== text) e.textContent = text; }
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
@@ -31,11 +34,11 @@ export class Hud {
 
   timer(phase: Phase, phaseEnd: number, night: number, counts: { bros: number; alive: number; opps: number }) {
     const p = $('phase');
-    p.textContent = phase === 'lockin' ? `LOCK IN · NIGHT ${night}` : PHASE_NAMES[phase];
+    setText(p, phase === 'lockin' ? `LOCK IN · NIGHT ${night}` : PHASE_NAMES[phase]);
     p.classList.toggle('lockin', phase === 'lockin');
     const left = phaseEnd ? Math.max(0, Math.ceil((phaseEnd - Date.now()) / 1000)) : 0;
-    $('timer').textContent = phase === 'lobby' ? 'WAITING' : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-    $('counts').textContent = `Bros ${counts.alive}/${counts.bros} alive · Opps ${counts.opps}`;
+    setText($('timer'), phase === 'lobby' ? 'WAITING' : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`);
+    setText($('counts'), `Bros ${counts.alive}/${counts.bros} alive · Opps ${counts.opps}`);
   }
 
   private lastMode: string | null = null;
@@ -278,7 +281,7 @@ export class Hud {
     $('aura').classList.toggle('on', on);
   }
 
-  hint(text: string) { $('hint').textContent = text; }
+  hint(text: string) { setText($('hint'), text); }
 
   feed(items: FeedItem[]) {
     const box = $('feed');
