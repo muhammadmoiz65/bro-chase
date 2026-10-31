@@ -22,6 +22,7 @@ export interface EntView {
   gk?: number; // kicks tier 1..3
   gv?: number; // body armour tier 1..3
   sh?: 1; // armour just blocked a grab (flash)
+  lk?: string; // bro look (shared/look.ts encodeLook)
 }
 
 export interface SelfView {
@@ -150,4 +151,5 @@ export type ClientMsg =
   | { t: 'scores' }
   | { t: 'start' } // host starts the night in a custom lobby
   | { t: 'role'; role: Role } // switch role between nights
+  | { t: 'look'; look: string } // changed look in the character creator (already saved to the account)
   | { t: 'pong'; at: number };
