@@ -37,6 +37,8 @@ export const sfx = {
   win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.25, 'triangle', 0.15), i * 140)); },
   /** The Opp's echo screech: a falling shriek. */
   screech(vol = 1) { tone(1400, 0.5, 'sawtooth', 0.12 * vol, -1100); setTimeout(() => tone(900, 0.4, 'square', 0.06 * vol, -600), 90); },
+  /** A vent grate clanking. */
+  vent(vol = 1) { tone(220, 0.08, 'square', 0.14 * vol, -80); setTimeout(() => tone(160, 0.1, 'square', 0.12 * vol, -60), 90); setTimeout(() => tone(240, 0.06, 'square', 0.1 * vol), 200); },
   ping() { tone(1800, 0.08, 'sine', 0.06); },
   lunge() { tone(160, 0.25, 'sawtooth', 0.12, 260); },
   /** A heartbeat thump; louder when a bro is close. */

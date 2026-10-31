@@ -4,10 +4,10 @@ import { Renderer } from './render.ts';
 import { Hud } from './hud.ts';
 import { Input, type Action } from './input.ts';
 import { chant, sfx } from './audio.ts';
-import { EVENTS, ITEM, MONSTER, SPEED } from '../../shared/constants.ts';
+import { EVENTS, ITEM, MONSTER, SPEED, VENT } from '../../shared/constants.ts';
 import { airborne, freshJump, kicksSpeed, stepJump, tryJump } from '../../shared/gear.ts';
 import {
-  cellAt, cribAtPos, dist, doorBlocks, doorCenter, move, overFence, type CribView, type DoorSide,
+  ventsFor, cellAt, cribAtPos, dist, doorBlocks, doorCenter, move, overFence, type CribView, type DoorSide,
 } from '../../shared/world.ts';
 import type { ClientMsg, EntView, LobbyInfo, Phase, Role, ServerMsg, WorldEvents } from '../../shared/protocol.ts';
 
@@ -63,6 +63,8 @@ class Game {
   sense = 0;
   lunCd = 0;
   lungeT = 0;
+  vcd = 0;
+  vnt = 0;
   lastBeat = 0;
   sounds: Array<{ x: number; y: number; r: number; born: number }> = [];
 
@@ -163,6 +165,8 @@ class Game {
     this.aura = m.you.aura;
     this.sense = m.you.sense ?? 0;
     this.lunCd = m.you.lun ?? 0;
+    this.vcd = m.you.vcd ?? 0;
+    this.vnt = m.you.vnt ?? 0;
     hud.hunter(m.you, m.phase);
     hud.wallet(m.you);
     this.drink = m.you.drink;
@@ -178,6 +182,7 @@ class Game {
     const hunter = this.role === 'opp';
     for (const n of m.noises) {
       if (!renderer.addNoise(n.id, n.x, n.y, n.r, hunter)) continue;
+      if (n.k === 'vent') renderer.rattleVent(n.x, n.y);
       // hear what's near you: footsteps, pets, smashing. Opps hear much farther.
       const d = dist(n.x, n.y, this.me.x, this.me.y);
       if (hunter && d > 1.5 && n.k !== 'screech' && n.k !== 'lunge') this.sounds.push({ x: n.x, y: n.y, r: n.r, born: performance.now() });
@@ -188,6 +193,7 @@ class Game {
       if (n.k === 'step' || n.k === 'zoom' || n.k === 'land') sfx.step(vol * (n.k === 'zoom' ? 1.6 : 1));
       else if (n.k === 'smash') sfx.knock();
       else if (n.k === 'bass') sfx.bass();
+      else if (n.k === 'vent') sfx.vent(vol);
     }
 
     const self = ents.get(this.selfId);
@@ -228,6 +234,12 @@ class Game {
   action(a: Action) {
     switch (a) {
       case 'screech': if (this.role === 'opp') this.send({ t: 'screech' }); break;
+      case 'vent': {
+        if (this.role !== 'opp') break;
+        const mv = input.move();
+        this.send({ t: 'vent', dx: mv.dx, dy: mv.dy });
+        break;
+      }
       case 'jump':
         if (this.role === 'opp' && this.phase === 'lockin' && this.lunCd <= 0 && this.lungeT <= 0 && !this.stunned) {
           this.lungeT = MONSTER.lungeSec;
@@ -299,7 +311,7 @@ class Game {
       this.lastSent = key;
       this.lastSentAt = t;
     }
-    if (!this.me.init || this.stunned) return;
+    if (!this.me.init || this.stunned || this.vnt > 0) return;
     const me = this.me;
     stepJump(me.jump, dt, this.ev.lowgrav, overFence(me.x, me.y, this.R));
     let sp: number;
@@ -326,7 +338,11 @@ class Game {
     }
     const sideName = (s: DoorSide) => (s === 0 ? 'front' : 'back');
     if (this.role === 'opp') {
+      if (this.vnt > 0) return 'Crawling through the vents...';
       if (best && doorBlocks(this.doors(best.plot, best.side))) return 'E: smash the door';
+      if (this.phase === 'lockin' && ventsFor(this.R).some((v) => dist(v[0], v[1], x, y) < VENT.useRange)) {
+        return this.vcd > 0 ? `Vent ready in ${Math.ceil(this.vcd)}s` : 'V: crawl into the vent (hold a direction to pick where you come out)';
+      }
       if (this.phase !== 'lockin') return 'You come out when the night starts. Q screech · Space lunge · E smash';
       if (this.sense > 0.6) return 'A bro is RIGHT here. Lunge (Space)!';
       if (this.sense > 0) return 'You can feel a bro close by. Screech (Q) to find them.';
@@ -353,7 +369,8 @@ class Game {
     const dt = Math.min(0.05, (now - (this.lastFrame || now)) / 1000);
     this.lastFrame = now;
     this.predict(dt);
-    const ents = this.interpolated();
+    // an Opp in the vents is hidden, even from itself
+    const ents = this.interpolated().filter((e) => !e.vt);
     const self = ents.find((e) => e.id === this.selfId);
     if (self && this.me.init) {
       self.x = this.me.x;

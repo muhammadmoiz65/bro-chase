@@ -22,6 +22,7 @@ export interface EntView {
   gk?: number; // kicks tier 1..3
   gv?: number; // body armour tier 1..3
   sh?: 1; // armour just blocked a grab (flash)
+  vt?: 1; // underground in a vent (only ever sent to yourself)
 }
 
 export interface SelfView {
@@ -44,6 +45,8 @@ export interface SelfView {
   lun?: number; // lunge cooldown left (s)
   sense?: number; // 0..1, how close the nearest bro is (heartbeat)
   wantOpp?: boolean; // queued to play as an Opp when a slot opens
+  vcd?: number; // Opp players: vent cooldown left (s)
+  vnt?: number; // seconds left underground
 }
 
 export interface DefView { id: number; k: DefKind; x: number; y: number; hp: number; lv: number; own?: 1; tx?: number; ty?: number; off?: 1 }
@@ -80,7 +83,7 @@ export interface LobbyListing {
   quick: boolean;
 }
 
-export type NoiseKind = 'screech' | 'lunge' | 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog' | 'decoy' | 'bass';
+export type NoiseKind = 'vent' | 'screech' | 'lunge' | 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog' | 'decoy' | 'bass';
 export interface NoiseView { id: number; x: number; y: number; r: number; k: NoiseKind }
 export interface DropView { id: number; x: number; y: number; k: 'aura' | 'cash' }
 
@@ -138,6 +141,7 @@ export type ClientMsg =
   | { t: 'input'; dx: number; dy: number; zoom: boolean; sneak?: boolean }
   | { t: 'jump' } // bros: jump. Opps: lunge
   | { t: 'screech' } // Opps: echo pulse that pings nearby bros
+  | { t: 'vent'; dx?: number; dy?: number } // Opps: crawl into the nearest vent, heading this way
   | { t: 'buy'; item: ShopId }
   | { t: 'item'; item: ItemId }
   | { t: 'build'; kind: DefKind }

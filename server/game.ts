@@ -4,14 +4,14 @@
 
 import type { WebSocket } from 'ws';
 import {
-  AURA, AURA_DELTA, BROS_PER_MONSTER, CASH, MONSTER, RADIUS, DEF, DEF_KINDS, DEFENCE, DOOR_LEVEL_HP, GEAR, ITEM, SHOP, type DefKind, type ItemId, type ShopId, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
+  AURA, AURA_DELTA, BROS_PER_MONSTER, CASH, MONSTER, RADIUS, VENT, DEF, DEF_KINDS, DEFENCE, DOOR_LEVEL_HP, GEAR, ITEM, SHOP, type DefKind, type ItemId, type ShopId, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
   PHASE_SEC, PLOT, RECONNECT_GRACE_SEC, REVIVE_RANGE, REVIVE_SEC, RING_LIGHT_RANGE, SPEED, TICK_RATE, VISION,
 } from '../shared/constants.ts';
 import type {
   ClientMsg, DropView, EntView, FeedItem, LobbyInfo, ModeName, NoiseKind, NoiseView, Phase, PropView, DefView, Role, ScoreRow, SelfView, ServerMsg,
 } from '../shared/protocol.ts';
 import {
-  cellAt, cribAtPos, cribSpawn, dist, doorBlocks, doorCells, doorCenter, move, overFence, plotCenter,
+  ventsFor, cellAt, cribAtPos, cribSpawn, dist, doorBlocks, doorCells, doorCenter, move, overFence, plotCenter,
   ringFor, type CribView, type DoorSide, type DoorState,
 } from '../shared/world.ts';
 import { findPath } from './path.ts';
@@ -66,6 +66,7 @@ interface Player {
   wantOpp: boolean; // asked to play as an Opp, waiting for a slot
   screechCd: number; lungeCd: number; lungeT: number;
   botT: number; botGoal: [number, number] | null; botPath: Array<[number, number]>; botReplan: number;
+  ventCd: number; ventT: number;
 }
 
 const BOT_NAMES = [
@@ -86,6 +87,8 @@ interface Ai {
   hunchAt: number;
   stats: RoundStats;
   blasterHits?: number;
+  ventCd: number; ventT: number;
+  ventPlan: { a: [number, number]; b: [number, number] } | null;
 }
 
 interface Noise { id: number; x: number; y: number; r: number; t: number; src: string | null; k: NoiseKind }
@@ -204,7 +207,7 @@ export class Room {
       repairing: false, rv: 0, hue: hueOf(id), cash: CASH.start, inv: { trap: 0, drink: 0, decoy: 0, bribe: 0 },
       drinkUntil: 0, bribeUntil: 0, cashT: 0, stats: freshStats(), ping: 0, stepT: 0,
       repairNoiseT: 0, smashCd: 0, chatTimes: [], bot: false, wantOpp: false, screechCd: 0, lungeCd: 0, lungeT: 0,
-      botT: 0, botGoal: null, botPath: [], botReplan: 0,
+      botT: 0, botGoal: null, botPath: [], botReplan: 0, ventCd: 0, ventT: 0,
     };
   }
 
@@ -396,6 +399,9 @@ export class Room {
         }
         break;
       case 'screech': this.screech(p); break;
+      case 'vent':
+        if (p.role === 'opp') this.enterVent(p, Number(msg.dx) || p.input.dx, Number(msg.dy) || p.input.dy);
+        break;
       case 'light':
         if (p.role === 'bro' && !p.npc) p.light = !p.light && p.aura > 0;
         break;
@@ -464,6 +470,71 @@ export class Room {
       .map((b) => [+b.x.toFixed(1), +b.y.toFixed(1)]);
     this.noise(p.x, p.y, MONSTER.screechNoise, p.id, 'screech');
     this.sendTo(p, { t: 'echo', x: +p.x.toFixed(1), y: +p.y.toFixed(1), r, pts });
+  }
+
+  // ---------- vents ----------
+
+  private nearestVent(x: number, y: number): [number, number] | null {
+    let best: [number, number] | null = null, bd = Infinity;
+    for (const v of ventsFor(this.R)) {
+      const d = dist(v[0], v[1], x, y);
+      if (d < bd) { bd = d; best = v; }
+    }
+    return best;
+  }
+
+  /** Pick the exit: the farthest vent (up to VENT.maxHop plots) within 50 degrees of the heading, else a random one. */
+  private ventExit(from: [number, number], dx: number, dy: number): [number, number] | null {
+    const all = ventsFor(this.R).filter((v) => {
+      const d = dist(v[0], v[1], from[0], from[1]);
+      return d > 1 && d <= VENT.maxHop * PLOT * 1.45;
+    });
+    if (!all.length) return null;
+    const l = Math.hypot(dx, dy);
+    if (l > 0.1) {
+      let best: [number, number] | null = null, bs = -Infinity;
+      for (const v of all) {
+        const vx = v[0] - from[0], vy = v[1] - from[1], d = Math.hypot(vx, vy);
+        const cos = (vx * dx + vy * dy) / (d * l);
+        if (cos < Math.cos((50 * Math.PI) / 180)) continue;
+        const score = d * cos;
+        if (score > bs) { bs = score; best = v; }
+      }
+      if (best) return best;
+    }
+    return all[Math.floor(Math.random() * all.length)];
+  }
+
+  /** Crawl in at the nearest grate; both grates clank so bros get a warning before the Opp pops out. */
+  private startVent(h: { x: number; y: number; ventCd: number; ventT: number; stunUntil: number }, to: [number, number], src: string | null): boolean {
+    const t = now();
+    if (this.phase !== 'lockin' || h.ventCd > 0 || h.ventT > 0 || t < h.stunUntil) return false;
+    const at = this.nearestVent(h.x, h.y);
+    if (!at || dist(at[0], at[1], h.x, h.y) > VENT.useRange) return false;
+    this.noise(at[0], at[1], VENT.noise, src, 'vent');
+    this.noise(to[0], to[1], VENT.noise, src, 'vent');
+    h.ventT = VENT.travelSec;
+    h.ventCd = VENT.cd + VENT.travelSec;
+    [h.x, h.y] = to;
+    return true;
+  }
+
+  private enterVent(p: Player, dx: number, dy: number) {
+    const at = this.nearestVent(p.x, p.y);
+    if (!at || dist(at[0], at[1], p.x, p.y) > VENT.useRange) return this.sys(p, 'Stand on a vent grate to crawl in.');
+    const to = this.ventExit(at, dx, dy);
+    if (to) this.startVent(p, to, p.id);
+  }
+
+  /** Tick a hunter's vent trip. Returns true while it is still underground. */
+  private stepVent(h: { x: number; y: number; ventCd: number; ventT: number }, src: string | null): boolean {
+    h.ventCd = Math.max(0, h.ventCd - DT);
+    if (h.ventT <= 0) return false;
+    h.ventT -= DT;
+    if (h.ventT > 0) return true;
+    h.ventT = 0;
+    this.noise(h.x, h.y, VENT.noise, src, 'vent'); // the grate bangs open
+    return false;
   }
 
   /** Space: a short burst of speed to close the gap. */
@@ -766,7 +837,7 @@ export class Room {
   }
 
   private hunters(): Hunter[] {
-    return [...this.ais, ...this.oppPlayers] as Hunter[];
+    return ([...this.ais, ...this.oppPlayers] as Array<Hunter & { ventT: number }>).filter((h) => h.ventT <= 0);
   }
 
   private stepDefs(t: number) {
@@ -821,7 +892,7 @@ export class Room {
 
   private stepProps(t: number) {
     this.props = this.props.filter((pr) => t < pr.until);
-    const hunters: Array<{ x: number; y: number; name: string; stunUntil: number; stunFrom: [number, number] }> = [...this.ais, ...this.oppPlayers];
+    const hunters: Array<{ x: number; y: number; name: string; stunUntil: number; stunFrom: [number, number] }> = this.hunters();
     for (const pr of [...this.props]) {
       if (pr.k === 'decoy') {
         if ((pr.noiseT -= DT) <= 0) { pr.noiseT = 0.8; this.noise(pr.x, pr.y, ITEM.decoyNoise, null, 'decoy'); }
@@ -918,6 +989,8 @@ export class Room {
       p.bribeUntil = 0;
       p.screechCd = 0;
       p.lungeCd = 0;
+      p.ventCd = 0;
+      p.ventT = 0;
       p.lungeT = 0;
     }
   }
@@ -947,7 +1020,7 @@ export class Room {
       const n = aiSeq++;
       this.ais.push({
         id: `ai-${n}`, name: `Opp #${this.ais.length + 1}`, x, y, path: [], goal: null, chase: null, chaseUntil: 0,
-        replanAt: 0, stunUntil: 0, stunFrom: [0, 0], smashNoiseT: 0, hunchAt: now() + 6 + Math.random() * 6,
+        replanAt: 0, stunUntil: 0, stunFrom: [0, 0], smashNoiseT: 0, hunchAt: now() + 6 + Math.random() * 6, ventCd: 4, ventT: 0, ventPlan: null,
         stats: freshStats(),
       });
       if (!initial) this.feed.push({ k: 'info', text: 'Another Opp crawled out.' });
@@ -1056,6 +1129,7 @@ export class Room {
       const moving = dx !== 0 || dy !== 0;
 
       if (p.role === 'opp') {
+        if (this.stepVent(p, p.id)) continue;
         if (t < p.stunUntil) {
           const a = Math.atan2(p.y - p.stunFrom[1], p.x - p.stunFrom[0]);
           [p.x, p.y] = move(p.x, p.y, Math.cos(a) * 2 * DT, Math.sin(a) * 2 * DT, this.R, this.doorLookup);
@@ -1225,6 +1299,12 @@ export class Room {
     const base = Math.min(SPEED.monsterAiMax, SPEED.monsterAi + minute * 0.18);
     const speed = base * (rage ? EVENTS.rageSpeed : 1) * (this.ev.power ? 1 : 1.1);
     for (const ai of this.ais) {
+      if (this.stepVent(ai, null)) continue;
+      if (ai.ventPlan && dist(ai.x, ai.y, ai.ventPlan.a[0], ai.ventPlan.a[1]) < VENT.useRange * 0.8) {
+        const plan = ai.ventPlan;
+        ai.ventPlan = null;
+        if (this.startVent(ai, plan.b, null)) { ai.path = []; ai.replanAt = t + VENT.travelSec; continue; }
+      }
       if (t < ai.stunUntil) {
         const a = Math.atan2(ai.y - ai.stunFrom[1], ai.x - ai.stunFrom[0]);
         [ai.x, ai.y] = move(ai.x, ai.y, Math.cos(a) * 2.2 * DT, Math.sin(a) * 2.2 * DT, this.R, this.doorLookup);
@@ -1280,6 +1360,20 @@ export class Room {
       goal = ai.goal;
     }
 
+    // a long way to go? take the vents if that saves real distance
+    ai.ventPlan = null;
+    const far = dist(ai.x, ai.y, goal[0], goal[1]);
+    if (ai.ventCd <= 0 && far > PLOT * 1.5) {
+      const a = this.nearestVent(ai.x, ai.y);
+      const g = goal;
+      const b = a && ventsFor(this.R)
+        .filter((v) => dist(v[0], v[1], a[0], a[1]) <= VENT.maxHop * PLOT * 1.45 && dist(v[0], v[1], a[0], a[1]) > 1)
+        .sort((u, v) => dist(u[0], u[1], g[0], g[1]) - dist(v[0], v[1], g[0], g[1]))[0];
+      if (a && b && dist(ai.x, ai.y, a[0], a[1]) + dist(b[0], b[1], g[0], g[1]) < far - VENT.aiMinGain) {
+        ai.ventPlan = { a, b };
+        goal = a;
+      }
+    }
     const res = findPath(Math.floor(ai.x), Math.floor(ai.y), Math.floor(goal[0]), Math.floor(goal[1]), this.R, this.doorLookup);
     ai.path = res ? res.cells : [];
   }
@@ -1370,7 +1464,7 @@ export class Room {
       defCount: this.defs.filter((d) => d.plot === p.crib).length,
       wantOpp: p.wantOpp || undefined,
       ...(p.role === 'opp' ? {
-        scr: +p.screechCd.toFixed(1), lun: +p.lungeCd.toFixed(1),
+        scr: +p.screechCd.toFixed(1), lun: +p.lungeCd.toFixed(1), vcd: +p.ventCd.toFixed(1), vnt: p.ventT > 0 ? +p.ventT.toFixed(1) : undefined,
         sense: this.phase === 'lockin' ? this.sense(p, t) : 0,
       } : {}),
     };
@@ -1433,9 +1527,11 @@ export class Room {
         l: p.light ? 1 : undefined, st: t < p.stunUntil ? 1 : undefined, rv: p.npc && p.rv > 0 ? +p.rv.toFixed(2) : undefined,
         c: p.hue, z: z > 0 ? +z.toFixed(2) : undefined, lit: p.light && !p.npc, ai: p.bot ? 1 : undefined,
         gk: p.kicks || undefined, gv: p.vest || undefined, sh: t < p.shieldUntil ? 1 : undefined,
+        vt: p.ventT > 0 ? 1 : undefined,
       });
     }
     for (const ai of this.ais) {
+      if (ai.ventT > 0) continue;
       all.push({ id: ai.id, k: 'opp', x: +ai.x.toFixed(2), y: +ai.y.toFixed(2), n: ai.name, ai: 1, st: t < ai.stunUntil ? 1 : undefined, lit: false });
     }
     const litBros = all.filter((e) => e.lit);
@@ -1459,6 +1555,7 @@ export class Room {
         const d = dist(e.x, e.y, p.x, p.y);
         if (d > INTEREST_RADIUS) continue;
         if (e.id !== p.id) {
+          if (e.vt) continue; // nobody sees an Opp in the vents
           if (monster) {
             // Opps are blind: they sense bros up close or see their ring lights
             if (e.k === 'npc') continue;
