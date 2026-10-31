@@ -14,6 +14,8 @@ Status: 💡 new · 👍 Moiz likes it · 🚧 being built · ✅ shipped · ❌
 | Graphics quality setting (Low / Medium / High) with auto-detect | Weak devices stay smooth, strong ones look great | ✅ auto, `?fx=0/1/2` to force; a menu toggle is still 💡 |
 | Rigged, animated character models (CC0) for bros and Opps that still take the custom look | Characters stop looking like stacked shapes; biggest remaining visual gap | 💡 |
 | Real models for street props (lamps, manholes, benches, bins) and crib walls with windows | The play area matches the new town around it | 💡 |
+| Babylon Inspector behind `?inspect` (dev only, lazy-loaded) | Click any object in the running game to see and tweak it, so graphics fixes go much faster | 💡 |
+| Use Babylon's GPU particles and glow layer for neon, lamps and ring lights | Brighter, cheaper glow effects that make the night modes pop | 💡 |
 | FPS counter toggle (F3) | Makes slowdowns easy to spot and report | 💡 |
 | Day-to-sunset sky over the night | The night feels like it moves forward, while the game stays bright | 💡 |
 | Weather events (rain puddles, wind) as short modes | More variety, and rain can hide footsteps for a moment | 💡 |

@@ -19,8 +19,9 @@
   **Replaced** by Babylon.js (next entry).
 - 2026-10-31: **Switch the client engine to Babylon.js.** Moiz said "I think we need to change our game engine", saw the side-by-side
   test (`proto/engines/`, [ENGINE-TEST.md](ENGINE-TEST.md)) and chose Babylon.js on the decision card, over the recommendation to stay
-  on Three.js. Still 2.5D, still a browser game, server and `shared/` unchanged. The move happens in 3 PRs: (1) engine core + world,
-  (2) characters, gear looks, creator, (3) effects, post-processing, then remove Three.js. Don't add new Three.js code.
+  on Three.js. Still 2.5D, still a browser game, server and `shared/` unchanged. Shipped as one PR (#10, after the test in #9), because two engines
+  can't share one screen, so a half-moved client wouldn't run. Three.js is gone from the game; it stays only as a dev dependency
+  for the engine test in `proto/engines/`. Don't add Three.js code to the game.
 - 2026-10-31: **Brain-rot theme** (memes like 67, aura, mog, rizz, Ohio).
 - 2026-10-31: **Bright game.** Only power cuts are dark. Moiz asked twice that it not be dark.
 - 2026-10-31: Power cuts are **random and last 10 to 20 seconds**, with smooth transitions. Other short random modes too (fog, rage, low gravity, disco, aura rain).
@@ -96,6 +97,13 @@
 - `shared/constants.ts` holds all tunables (speeds, noise, prices, phase lengths, 4:1 ratio as `BROS_PER_MONSTER`).
 - `shared/gear.ts`, `shared/look.ts` gear tiers and character looks. `shared/protocol.ts` messages.
 - `client/src/` renderer (`render.ts`), HUD, input, audio, avatar, creator, effects (`fx/`), upgrade models.
+- `client/src/bjs/kit.ts` is the Babylon.js toolkit every 3D file uses: shape builders (`box`, `sphere`, `cyl`, `capsule`, `torus`...),
+  materials (`std` = lit PBR, `basic` = unlit), `instances()` (thin instances, one draw call), `textSprite()` labels, `castShadows()`,
+  `addTick()` for animated parts, and the shader patches `groundOcclusion()` and `rimLight()`.
+- Babylon scene is **right-handed**, y up, game x -> x, game y -> z (same as before). Colours are sRGB hex; `std()` converts to linear.
+- Post-processing (`fx/post.ts`): Babylon's DefaultRenderingPipeline (bloom, ACES, MSAA) then our `grade` pass, which must stay last.
+- The glTF loader is a lazy chunk (town models load after the game starts). Env light: `client/public/env/sky.hdr` (Poly Haven, CC0).
+- `window.__bro` is the renderer, for debugging in the browser console.
 - Server is Express + `ws`, not Colyseus (the old plan said Colyseus).
 
 ### Controls (bro)

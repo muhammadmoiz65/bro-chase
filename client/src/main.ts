@@ -23,6 +23,7 @@ const ls = {
 let account: Account | null = null;
 let game: Game | null = null;
 const renderer = new Renderer($('game'));
+(window as unknown as { __bro: Renderer }).__bro = renderer; // handy for debugging in the console
 const hud = new Hud();
 const input = new Input();
 const announcer = new Announcer();

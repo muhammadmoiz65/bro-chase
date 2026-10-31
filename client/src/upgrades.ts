@@ -1,80 +1,60 @@
 // Per-level looks for everything you can upgrade: crib doors (door armor 0..3),
 // defences (levels 1..3), and player gear (kicks and body armour, tiers 0..3).
-// Each builder returns a THREE.Group. Animated pieces register a `tick(t)` in userData,
-// which the renderer calls every frame through tickUpgrades().
+// Each builder returns a node. Animated pieces register a tick(t) (see kit.addTick),
+// which the renderer runs every frame through tickUpgrades().
 
-import * as THREE from 'three';
+import {
+  add, addTick, basic, box, canvasTexture, castShadows, circle, cone, cyl, group, lin, octa, plane, setOpacity, shade, show, sphere, std,
+  tickAll, torus, ud, type Mesh, type Node,
+} from './bjs/kit.ts';
+import type { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial';
+import { Color3 } from '@babylonjs/core/Maths/math.color';
 
-type Tick = (t: number) => void;
+const at = <T extends Node>(o: T, x = 0, y = 0, z = 0): T => { o.position.set(x, y, z); return o; };
 
-const std = (color: number, o: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
-  new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...o });
-
-function box(w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-  m.position.set(x, y, z);
-  m.castShadow = true;
-  return m;
-}
-
-function addTick(o: THREE.Object3D, fn: Tick) {
-  const prev = o.userData.tick as Tick | undefined;
-  o.userData.tick = prev ? (t: number) => { prev(t); fn(t); } : fn;
-}
-
-/** Run every `userData.tick` under `root` (doors, defences, gear). */
-export function tickUpgrades(root: THREE.Object3D, t: number) {
-  root.traverse((o) => { const f = o.userData.tick as Tick | undefined; if (f) f(t); });
-}
+/** Run every tick under `root` (doors, defences, gear). */
+export function tickUpgrades(root: Node, t: number) { tickAll(root, t); }
 
 // ---------------------------------------------------------------- doors
 
 export const DOOR_LOOK = ['Wood door', 'Iron-banded door', 'Steel blast door', 'Sigma vault'] as const;
 
+export interface DoorData { level: number; setHp: (frac: number) => void; targetY?: number }
+
 /**
  * A crib door, 2 wide x 1.35 tall x 0.22 deep, centred on its origin.
- * userData.setHp(frac) tints it as it takes damage.
+ * ud<DoorData>(door).setHp(frac) tints it as it takes damage.
  */
-export function makeDoor(level: number, paint = 0xb07a3c): THREE.Group {
-  const g = new THREE.Group();
-  g.userData.level = level;
+export function makeDoor(level: number, paint = 0xb07a3c): Node {
+  const g = group(null, 'door');
   const W = 2, H = 1.35, D = 0.22;
-  let slabMat: THREE.MeshStandardMaterial;
-  const base = new THREE.Color();
+  let slabMat: PBRMaterial;
+  let neon: PBRMaterial | null = null;
 
   if (level <= 0) {
     // plain planks
     slabMat = std(paint, { roughness: 0.75 });
-    g.add(box(W, H, D, slabMat));
+    add(g, box(W, H, D, slabMat));
     const groove = std(0x6b4220);
-    for (const x of [-0.5, 0, 0.5]) for (const z of [D / 2 + 0.005, -D / 2 - 0.005]) g.add(box(0.03, H - 0.1, 0.01, groove, x, 0, z));
-    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), std(0xd9c27a, { metalness: 0.8, roughness: 0.3 }));
-    knob.position.set(0.75, 0, D / 2 + 0.04);
-    g.add(knob);
+    for (const x of [-0.5, 0, 0.5]) for (const z of [D / 2 + 0.005, -D / 2 - 0.005]) add(g, box(0.03, H - 0.1, 0.01, groove, x, 0, z));
+    add(g, at(sphere(0.05, std(0xd9c27a, { metalness: 0.8, roughness: 0.3 }), { seg: 8 }), 0.75, 0, D / 2 + 0.04));
   } else if (level === 1) {
     // wood with black iron bands and rivets
-    slabMat = std(new THREE.Color(paint).multiplyScalar(0.85).getHex(), { roughness: 0.7 });
-    g.add(box(W, H, D, slabMat));
+    slabMat = std(shade(paint, 0.85), { roughness: 0.7 });
+    add(g, box(W, H, D, slabMat));
     const iron = std(0x2b2d33, { metalness: 0.7, roughness: 0.45 });
     const rivet = std(0x8a8f99, { metalness: 0.55, roughness: 0.3 });
-    const rg = new THREE.SphereGeometry(0.035, 6, 5);
     for (const y of [-0.42, 0.42]) {
       for (const z of [D / 2 + 0.015, -D / 2 - 0.015]) {
-        g.add(box(W + 0.04, 0.14, 0.03, iron, 0, y, z));
-        for (const x of [-0.85, -0.3, 0.3, 0.85]) {
-          const r = new THREE.Mesh(rg, rivet);
-          r.position.set(x, y, z + Math.sign(z) * 0.02);
-          g.add(r);
-        }
+        add(g, box(W + 0.04, 0.14, 0.03, iron, 0, y, z));
+        for (const x of [-0.85, -0.3, 0.3, 0.85]) add(g, at(sphere(0.035, rivet, { seg: 6 }), x, y, z + Math.sign(z) * 0.02));
       }
     }
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.02, 6, 14), iron);
-    ring.position.set(0.7, 0, D / 2 + 0.05);
-    g.add(ring);
+    add(g, at(torus(0.09, 0.02, iron, 14), 0.7, 0, D / 2 + 0.05));
   } else if (level === 2) {
     // steel blast door: brushed plate, X brace, hazard stripes
     slabMat = std(0xaab3bf, { metalness: 0.55, roughness: 0.35 });
-    g.add(box(W, H, D + 0.04, slabMat));
+    add(g, box(W, H, D + 0.04, slabMat));
     const dark = std(0x4a515c, { metalness: 0.8, roughness: 0.4 });
     const len = Math.hypot(W - 0.2, H - 0.2);
     const ang = Math.atan2(H - 0.2, W - 0.2);
@@ -82,78 +62,72 @@ export function makeDoor(level: number, paint = 0xb07a3c): THREE.Group {
       for (const s of [1, -1]) {
         const b = box(len, 0.12, 0.04, dark, 0, 0, z);
         b.rotation.z = s * ang;
-        g.add(b);
+        add(g, b);
       }
-      g.add(box(W, 0.1, 0.04, dark, 0, H / 2 - 0.05, z));
+      add(g, box(W, 0.1, 0.04, dark, 0, H / 2 - 0.05, z));
     }
     // yellow / black hazard band along the bottom
-    const c = document.createElement('canvas');
-    c.width = 128; c.height = 16;
-    const ctx = c.getContext('2d')!;
-    ctx.fillStyle = '#ffd23f'; ctx.fillRect(0, 0, 128, 16);
-    ctx.fillStyle = '#111';
-    for (let x = -16; x < 128; x += 16) { ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x + 8, 0); ctx.lineTo(x + 16, 0); ctx.lineTo(x + 8, 16); ctx.fill(); }
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const hz = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 });
-    for (const z of [D / 2 + 0.036, -D / 2 - 0.036]) g.add(box(W, 0.16, 0.03, hz, 0, -H / 2 + 0.1, z));
+    const tex = canvasTexture(128, 16, (ctx) => {
+      ctx.fillStyle = '#ffd23f'; ctx.fillRect(0, 0, 128, 16);
+      ctx.fillStyle = '#111';
+      for (let x = -16; x < 128; x += 16) { ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x + 8, 0); ctx.lineTo(x + 16, 0); ctx.lineTo(x + 8, 16); ctx.fill(); }
+    });
+    const hz = std(0xffffff, { roughness: 0.6, map: tex });
+    for (const z of [D / 2 + 0.036, -D / 2 - 0.036]) add(g, box(W, 0.16, 0.03, hz, 0, -H / 2 + 0.1, z));
     const bolt = std(0xd0d6de, { metalness: 0.55, roughness: 0.2 });
-    const bg = new THREE.CylinderGeometry(0.045, 0.045, 0.05, 6);
     for (const x of [-0.9, 0.9]) for (const y of [-0.5, 0.5]) {
-      const b = new THREE.Mesh(bg, bolt);
+      const b = at(cyl(0.045, 0.045, 0.05, bolt, { seg: 6 }), x, y, D / 2 + 0.05);
       b.rotation.x = Math.PI / 2;
-      b.position.set(x, y, D / 2 + 0.05);
-      g.add(b);
+      add(g, b);
     }
   } else {
     // Sigma vault: black chrome, gold vault wheel, purple neon frame, crown on top
     slabMat = std(0x2a2d3d, { metalness: 0.55, roughness: 0.25 });
-    g.add(box(W, H, D + 0.08, slabMat));
-    const neon = new THREE.MeshStandardMaterial({ color: 0xd9a0ff, emissive: 0xb46bff, emissiveIntensity: 2.2 });
+    add(g, box(W, H, D + 0.08, slabMat));
+    neon = std(0xd9a0ff, { emissive: 0xb46bff, emissiveIntensity: 2.2 });
     for (const z of [D / 2 + 0.05, -D / 2 - 0.05]) {
-      g.add(box(W, 0.05, 0.02, neon, 0, H / 2 - 0.04, z));
-      g.add(box(W, 0.05, 0.02, neon, 0, -H / 2 + 0.04, z));
-      g.add(box(0.05, H, 0.02, neon, -W / 2 + 0.04, 0, z));
-      g.add(box(0.05, H, 0.02, neon, W / 2 - 0.04, 0, z));
+      add(g,
+        box(W, 0.05, 0.02, neon, 0, H / 2 - 0.04, z),
+        box(W, 0.05, 0.02, neon, 0, -H / 2 + 0.04, z),
+        box(0.05, H, 0.02, neon, -W / 2 + 0.04, 0, z),
+        box(0.05, H, 0.02, neon, W / 2 - 0.04, 0, z));
     }
     const gold = std(0xffc83d, { metalness: 0.55, roughness: 0.25, emissive: 0x553300, emissiveIntensity: 0.4 });
-    const wheel = new THREE.Group();
-    wheel.add(new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.04, 8, 28), gold));
+    const wheel = group(g, 'wheel');
+    add(wheel, torus(0.3, 0.04, gold, 28));
     for (let i = 0; i < 3; i++) {
       const spoke = box(0.6, 0.04, 0.04, gold);
       spoke.rotation.z = (i * Math.PI) / 3;
-      wheel.add(spoke);
+      add(wheel, spoke);
     }
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.06, 12), gold);
+    const hub = cyl(0.08, 0.08, 0.06, gold, { seg: 12 });
     hub.rotation.x = Math.PI / 2;
-    wheel.add(hub);
+    add(wheel, hub);
     wheel.position.set(0, 0, D / 2 + 0.1);
-    g.add(wheel);
     addTick(wheel, (t) => { wheel.rotation.z = t / 2500; });
     // a little crown floating above the door
-    const crown = new THREE.Group();
-    crown.add(new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.08, 14, 1, true), gold));
+    const crown = group(g, 'crown');
+    add(crown, cyl(0.18, 0.18, 0.08, gold, { seg: 14, open: true }));
     for (let i = 0; i < 5; i++) {
       const a = (i / 5) * Math.PI * 2;
-      const p = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.12, 4), gold);
-      p.position.set(Math.cos(a) * 0.18, 0.1, Math.sin(a) * 0.18);
-      crown.add(p);
+      add(crown, at(cone(0.04, 0.12, gold, 4), Math.cos(a) * 0.18, 0.1, Math.sin(a) * 0.18));
     }
     crown.position.set(0, H / 2 + 0.25, 0);
-    g.add(crown);
     addTick(crown, (t) => { crown.rotation.y = t / 900; crown.position.y = H / 2 + 0.25 + Math.sin(t / 400) * 0.05; });
-    g.userData.neon = neon;
   }
-  base.copy(slabMat.color);
-  g.userData.setHp = (frac: number) => {
+  const base = slabMat.albedoColor.clone();
+  const broken = lin(0x8a1a10);
+  slabMat.emissiveColor = lin(0xff2020);
+  slabMat.emissiveIntensity = 0;
+  const data = ud<DoorData>(g);
+  data.level = level;
+  data.setHp = (frac: number) => {
     const f = Math.max(0, Math.min(1, frac));
-    slabMat.color.copy(base).lerp(new THREE.Color(0x8a1a10), (1 - f) * 0.7); // goes red as it breaks
-    slabMat.emissive.setHex(0xff2020);
+    Color3.LerpToRef(base, broken, (1 - f) * 0.7, slabMat.albedoColor); // goes red as it breaks
     slabMat.emissiveIntensity = f < 0.35 ? (0.35 - f) * 1.2 : 0;
-    const neonMat = g.userData.neon as THREE.MeshStandardMaterial | undefined;
-    if (neonMat) neonMat.emissiveIntensity = 0.6 + 1.6 * f;
+    if (neon) neon.emissiveIntensity = 0.6 + 1.6 * f;
   };
-  g.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
+  castShadows(g);
   return g;
 }
 
@@ -170,77 +144,62 @@ export function defenceKind(id: string): DefenceKind {
   return 'turret';
 }
 
+export interface DefData { kind: DefenceKind; level: number; fire: (aim?: number) => void; setOff: (off: boolean) => void }
+
 /**
  * A defence at upgrade level 1..3, standing on the ground at its origin (about 1 tile wide).
- * Call userData.fire(aimAngle) for a muzzle flash / pulse when it triggers (the blaster turns
- * to aimAngle, atan2(dx, dz)); userData.setOff(true) dims it while it's disabled.
+ * ud<DefData>(g).fire(aimAngle) shows a muzzle flash / pulse when it triggers (the blaster turns
+ * to aimAngle, atan2(dx, dz)); setOff(true) dims it while it's disabled.
  */
-export function makeDefence(kindOrId: string, level: number): THREE.Group {
+export function makeDefence(kindOrId: string, level: number): Node {
   const kind = defenceKind(kindOrId);
   const lv = Math.max(1, Math.min(3, Math.round(level) || 1));
   const g = kind === 'turret' ? rizzBlaster(lv) : kind === 'lamp' ? auraLamp(lv) : bassDrop(lv);
-  g.userData.kind = kind;
-  g.userData.level = lv;
+  const d = ud<DefData>(g);
+  d.kind = kind;
+  d.level = lv;
   // level pips on the base so you can read the level at a glance
-  const pip = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xffb000, emissiveIntensity: 1.2 });
-  for (let i = 0; i < lv; i++) {
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), pip);
-    p.position.set((i - (lv - 1) / 2) * 0.14, 0.06, 0.46);
-    g.add(p);
-  }
-  g.userData.setOff ??= () => {};
-  g.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
+  const pip = std(0xffd23f, { emissive: 0xffb000, emissiveIntensity: 1.2 });
+  for (let i = 0; i < lv; i++) add(g, at(sphere(0.05, pip, { seg: 8 }), (i - (lv - 1) / 2) * 0.14, 0.06, 0.46));
+  d.setOff ??= () => {};
+  castShadows(g);
   return g;
 }
 
-function rizzBlaster(lv: number): THREE.Group {
+function rizzBlaster(lv: number): Node {
   // L1 one pink barrel on a tripod, L2 twin barrels + ammo box, L3 gold quad minigun with a radar dish
-  const g = new THREE.Group();
+  const g = group(null, 'blaster');
   const metal = std(lv === 3 ? 0xffc83d : 0x3a3f4b, { metalness: 0.8, roughness: 0.35 });
-  const pink = new THREE.MeshStandardMaterial({ color: 0xff5fa2, emissive: 0xff2d7a, emissiveIntensity: lv === 1 ? 0.4 : 1 });
+  const pink = std(0xff5fa2, { emissive: 0xff2d7a, emissiveIntensity: lv === 1 ? 0.4 : 1 });
   if (lv === 1) {
     for (let i = 0; i < 3; i++) {
-      const leg = box(0.05, 0.6, 0.05, metal);
       const a = (i / 3) * Math.PI * 2;
-      leg.position.set(Math.cos(a) * 0.18, 0.28, Math.sin(a) * 0.18);
+      const leg = box(0.05, 0.6, 0.05, metal, Math.cos(a) * 0.18, 0.28, Math.sin(a) * 0.18);
       leg.rotation.set(Math.sin(a) * 0.35, 0, -Math.cos(a) * 0.35);
-      g.add(leg);
+      add(g, leg);
     }
   } else {
-    const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.42, 0.3, lv === 3 ? 8 : 6), metal);
-    plinth.position.y = 0.15;
-    g.add(plinth);
+    add(g, at(cyl(0.34, 0.42, 0.3, metal, { seg: lv === 3 ? 8 : 6 }), 0, 0.15, 0));
   }
-  const head = new THREE.Group();
+  const head = group(g, 'head');
   head.position.y = lv === 1 ? 0.62 : 0.55;
-  head.add(new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 10), metal));
+  add(head, sphere(0.18, metal, { seg: 12 }));
   const barrels = lv === 1 ? [[0, 0]] : lv === 2 ? [[-0.08, 0], [0.08, 0]] : [[-0.07, -0.07], [0.07, -0.07], [-0.07, 0.07], [0.07, 0.07]];
-  const spin = new THREE.Group();
+  const spin = group(head, 'spin');
   for (const [x, y] of barrels) {
-    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.5, 10), pink);
+    const b = at(cyl(0.045, 0.05, 0.5, pink, { seg: 10 }), x, y, 0.3);
     b.rotation.x = Math.PI / 2;
-    b.position.set(x, y, 0.3);
-    spin.add(b);
+    add(spin, b);
   }
-  head.add(spin);
-  const flash = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffb3d9, transparent: true, opacity: 0 }));
-  flash.position.z = 0.6;
-  head.add(flash);
-  if (lv >= 2) {
-    const ammo = box(0.2, 0.16, 0.22, std(0x4a5a2a), -0.26, 0, -0.05);
-    head.add(ammo);
-    const heart = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), pink);
-    heart.position.set(0, 0.2, 0);
-    head.add(heart);
-  }
+  const flashMat = basic(0xffb3d9, { opacity: 0 });
+  add(head, at(sphere(0.12, flashMat, { seg: 8 }), 0, 0, 0.6));
+  if (lv >= 2) add(head, box(0.2, 0.16, 0.22, std(0x4a5a2a), -0.26, 0, -0.05), at(sphere(0.05, pink, { seg: 8 }), 0, 0.2, 0));
   if (lv === 3) {
-    const dish = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.07, 16, 1, true), std(0xe0e4ea, { metalness: 0.55, side: THREE.DoubleSide }));
-    dish.position.set(0, 0.28, -0.08);
+    const dish = at(cone(0.16, 0.07, std(0xe0e4ea, { metalness: 0.55, doubleSide: true }), 16, true), 0, 0.28, -0.08);
     dish.rotation.x = -0.6;
-    head.add(dish);
+    add(head, dish);
     addTick(dish, (t) => { dish.rotation.y = t / 300; });
   }
-  g.add(head);
   let fired = 0;
   let aim = 0;
   addTick(g, (t) => {
@@ -248,97 +207,83 @@ function rizzBlaster(lv: number): THREE.Group {
     head.rotation.y = t - fired < 700 ? aim : Math.sin(t / (1400 - lv * 250)) * 1.2;
     if (lv === 3) spin.rotation.z = t / 60;
     const age = (t - fired) / 120;
-    (flash.material as THREE.MeshBasicMaterial).opacity = age < 1 ? 1 - age : 0;
+    flashMat.alpha = age < 1 ? 1 - age : 0;
   });
-  g.userData.fire = (a?: number) => { fired = performance.now(); if (a !== undefined) aim = a; };
+  ud<DefData>(g).fire = (a?: number) => { fired = performance.now(); if (a !== undefined) aim = a; };
   return g;
 }
 
-function auraLamp(lv: number): THREE.Group {
+function auraLamp(lv: number): Node {
   // L1 desk-lamp purple bulb, L2 tall pole with a halo, L3 floating crystal with orbiting rings
-  const g = new THREE.Group();
+  const g = group(null, 'lamp');
   const pole = std(lv === 3 ? 0xffc83d : 0x2a2d38, { metalness: 0.7, roughness: 0.4 });
-  const glow = new THREE.MeshStandardMaterial({ color: 0xe9c8ff, emissive: 0xb46bff, emissiveIntensity: 1.2 + lv * 0.8 });
+  const glow = std(0xe9c8ff, { emissive: 0xb46bff, emissiveIntensity: 1.2 + lv * 0.8 });
   const h = [0, 0.8, 1.3, 1.5][lv];
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 0.12, 12), pole);
-  base.position.y = 0.06;
-  g.add(base);
-  if (lv < 3) {
-    const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, h, 8), pole);
-    stick.position.y = h / 2;
-    g.add(stick);
-  }
-  const bulb = new THREE.Mesh(lv === 3 ? new THREE.OctahedronGeometry(0.22) : new THREE.SphereGeometry(0.16 + lv * 0.03, 14, 10), glow);
-  bulb.position.y = h + 0.12;
-  g.add(bulb);
-  const rings: THREE.Mesh[] = [];
+  add(g, at(cyl(0.22, 0.3, 0.12, pole, { seg: 12 }), 0, 0.06, 0));
+  if (lv < 3) add(g, at(cyl(0.04, 0.05, h, pole, { seg: 8 }), 0, h / 2, 0));
+  const bulb = at(lv === 3 ? octa(0.22, glow) : sphere(0.16 + lv * 0.03, glow, { seg: 14 }), 0, h + 0.12, 0);
+  add(g, bulb);
+  const rings: Mesh[] = [];
   for (let i = 0; i < lv - 1; i++) {
-    const r = new THREE.Mesh(new THREE.TorusGeometry(0.3 + i * 0.12, 0.02, 6, 32), glow);
-    r.position.y = h + 0.12;
+    const r = at(torus(0.3 + i * 0.12, 0.02, glow, 32), 0, h + 0.12, 0);
     r.rotation.x = Math.PI / 2;
-    g.add(r);
+    add(g, r);
     rings.push(r);
   }
-  const pool = new THREE.Mesh(
-    new THREE.CircleGeometry(0.6 + lv * 0.35, 32),
-    new THREE.MeshBasicMaterial({ color: 0xb46bff, transparent: true, opacity: 0.18, depthWrite: false }),
-  );
+  const poolMat = basic(0xb46bff, { opacity: 0.18, depthWrite: false });
+  const pool = at(circle(0.6 + lv * 0.35, poolMat, 32), 0, 0.02, 0);
   pool.rotation.x = -Math.PI / 2;
-  pool.position.y = 0.02;
-  g.add(pool);
+  add(g, pool);
   let off = false;
   let flash = 0;
   addTick(g, (t) => {
     const pulse = 0.5 + 0.5 * Math.sin(t / 350);
     const f = t - flash < 200 ? 4 : 0;
     glow.emissiveIntensity = off ? 0.05 : 1 + lv * 0.8 + pulse * 0.8 + f;
-    pool.visible = !off;
-    (pool.material as THREE.MeshBasicMaterial).opacity = 0.12 + pulse * 0.1;
+    show(pool, !off);
+    setOpacity(poolMat, 0.12 + pulse * 0.1);
     if (lv === 3) { bulb.rotation.y = t / 600; bulb.position.y = h + 0.12 + Math.sin(t / 500) * 0.08; }
     rings.forEach((r, i) => { r.rotation.x = Math.PI / 2 + Math.sin(t / 700 + i) * 0.6; r.rotation.y = t / (500 + i * 200); });
   });
-  g.userData.fire = () => { flash = performance.now(); };
-  g.userData.setOff = (o: boolean) => { off = o; };
+  const d = ud<DefData>(g);
+  d.fire = () => { flash = performance.now(); };
+  d.setOff = (o: boolean) => { off = o; };
   return g;
 }
 
-function bassDrop(lv: number): THREE.Group {
+function bassDrop(lv: number): Node {
   // L1 one speaker box, L2 stacked pair, L3 three-speaker wall with neon and a gold chain
-  const g = new THREE.Group();
+  const g = group(null, 'bass');
   const cab = std(lv === 3 ? 0x15151c : 0x26262e, { roughness: 0.8 });
-  const cone = std(0x55555f, { metalness: 0.3, roughness: 0.5 });
-  const neon = new THREE.MeshStandardMaterial({ color: 0x7ef9ff, emissive: 0x3bd1ff, emissiveIntensity: lv === 1 ? 0.5 : 1.6 });
+  const coneM = std(0x55555f, { metalness: 0.3, roughness: 0.5 });
+  const neon = std(0x7ef9ff, { emissive: 0x3bd1ff, emissiveIntensity: lv === 1 ? 0.5 : 1.6 });
   const spots: Array<[number, number, number]> = lv === 1 ? [[0, 0.3, 0.5]] : lv === 2 ? [[0, 0.3, 0.5], [0, 0.85, 0.42]] : [[-0.3, 0.3, 0.45], [0.3, 0.3, 0.45], [0, 0.8, 0.55]];
-  const woofers: THREE.Mesh[] = [];
+  const woofers: Mesh[] = [];
   for (const [x, y, s] of spots) {
-    g.add(box(s * 1.1, s * 1.1, s * 0.8, cab, x, y, 0));
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.38, s * 0.42, 0.06, 20), cone);
+    add(g, box(s * 1.1, s * 1.1, s * 0.8, cab, x, y, 0));
+    const w = at(cyl(s * 0.38, s * 0.42, 0.06, coneM, { seg: 20 }), x, y, s * 0.42);
     w.rotation.x = Math.PI / 2;
-    w.position.set(x, y, s * 0.42);
-    g.add(w);
+    add(g, w);
     woofers.push(w);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(s * 0.43, 0.018, 6, 24), neon);
-    rim.position.set(x, y, s * 0.44);
-    g.add(rim);
+    add(g, at(torus(s * 0.43, 0.018, neon, 24), x, y, s * 0.44));
   }
   if (lv === 3) {
     const gold = std(0xffc83d, { metalness: 0.55, roughness: 0.25 });
     for (let i = 0; i < 9; i++) {
-      const link = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.012, 5, 10), gold);
       const a = (i / 8) * Math.PI;
-      link.position.set(Math.cos(a) * 0.35, 1.12 - Math.sin(a) * 0.12, 0.3);
+      const link = at(torus(0.035, 0.012, gold, 10), Math.cos(a) * 0.35, 1.12 - Math.sin(a) * 0.12, 0.3);
       link.rotation.y = i % 2 ? Math.PI / 2 : 0;
-      g.add(link);
+      add(g, link);
     }
   }
   let dropped = 0;
   addTick(g, (t) => {
     const age = (t - dropped) / 400;
     const thump = age < 1 ? (1 - age) * 0.25 : 0.03 * Math.max(0, Math.sin(t / 120));
-    for (const w of woofers) w.scale.set(1 + thump, 1 + thump * 3, 1 + thump);
+    for (const w of woofers) w.scaling.set(1 + thump, 1 + thump * 3, 1 + thump);
     neon.emissiveIntensity = (lv === 1 ? 0.5 : 1.6) + (age < 1 ? (1 - age) * 3 : 0);
   });
-  g.userData.fire = () => { dropped = performance.now(); };
+  ud<DefData>(g).fire = () => { dropped = performance.now(); };
   return g;
 }
 
@@ -362,136 +307,116 @@ export const BRO_ANCHORS: GearAnchors = {
   shoulderX: 0.3, shoulderY: 0.88,
 };
 
+export interface GearData { gear?: Node; gearKey?: string; kickFeet?: Node[] }
+export interface GearNodeData { helmet: boolean; feet: Node[]; setShield: (on: boolean, t: number) => void }
+
 /**
- * Put kicks and body armour (tiers 0..3) on a character group. Calling it again replaces
- * the old gear. Returns the gear group (also kept as group.userData.gear).
+ * Put kicks and body armour (tiers 0..3) on a character node. Calling it again replaces
+ * the old gear. Returns the gear node (also kept as ud<GearData>(owner).gear).
  */
-export function applyGear(group: THREE.Object3D, kicks: number, vest: number, a: GearAnchors = BRO_ANCHORS): THREE.Group {
-  (group.userData.gear as THREE.Group | undefined)?.removeFromParent();
-  const gear = new THREE.Group();
-  gear.name = 'gear';
-  group.userData.gear = gear;
-  group.userData.gearKey = `${kicks}:${vest}`;
-  if (kicks > 0) gear.add(makeKicks(kicks, a));
-  if (vest > 0) gear.add(makeVest(vest, a));
-  gear.userData.helmet = vest >= 3; // a custom avatar should hide its hat and hair while this is true
+export function applyGear(owner: Node, kicks: number, vest: number, a: GearAnchors = BRO_ANCHORS): Node {
+  const od = ud<GearData>(owner);
+  od.gear?.dispose(false, true);
+  const gear = group(owner, 'gear');
+  od.gear = gear;
+  od.gearKey = `${kicks}:${vest}`;
+  const gd = ud<GearNodeData>(gear);
+  gd.feet = kicks > 0 ? makeKicks(gear, kicks, a) : [];
+  if (vest > 0) makeVest(vest, a).parent = gear;
+  gd.helmet = vest >= 3; // a custom avatar should hide its hat and hair while this is true
+  castShadows(gear);
   // armour bubble that flashes when it blocks a grab (setShield)
-  const bubble = new THREE.Mesh(
-    new THREE.SphereGeometry(0.75, 20, 14),
-    new THREE.MeshBasicMaterial({ color: vest >= 3 ? 0xffd23f : 0x9fd8ff, transparent: true, opacity: 0, depthWrite: false }),
-  );
-  bubble.position.y = a.torsoY + 0.1;
-  bubble.visible = false;
-  gear.add(bubble);
-  gear.userData.setShield = (on: boolean, t: number) => {
-    bubble.visible = on;
-    (bubble.material as THREE.MeshBasicMaterial).opacity = on ? 0.25 + 0.15 * Math.sin(t / 60) : 0;
+  const bubbleMat = basic(vest >= 3 ? 0xffd23f : 0x9fd8ff, { opacity: 0, depthWrite: false });
+  const bubble = at(sphere(0.75, bubbleMat, { seg: 20 }), 0, a.torsoY + 0.1, 0);
+  bubble.parent = gear;
+  bubble.setEnabled(false);
+  gd.setShield = (on: boolean, t: number) => {
+    show(bubble, on);
+    bubbleMat.alpha = on ? 0.25 + 0.15 * Math.sin(t / 60) : 0;
   };
-  gear.traverse((o) => { if ((o as THREE.Mesh).isMesh && o !== bubble) o.castShadow = true; });
-  group.add(gear);
   return gear;
 }
 
-function makeKicks(tier: number, a: GearAnchors): THREE.Group {
-  const g = new THREE.Group();
+function makeKicks(parent: Node, tier: number, a: GearAnchors): Node[] {
   const upper = tier === 1 ? std(0xf4f4f4, { roughness: 0.5 })
     : tier === 2 ? std(0x1b1b22, { roughness: 0.4 })
     : std(0xffc83d, { metalness: 0.55, roughness: 0.25, emissive: 0x553300, emissiveIntensity: 0.5 });
   const sole = tier === 1 ? std(0xffffff)
-    : new THREE.MeshStandardMaterial({ color: tier === 2 ? 0x7dff6b : 0xffffff, emissive: tier === 2 ? 0x2bff3a : 0xfff1a0, emissiveIntensity: 1.8 });
-  const accent = tier === 1 ? std(0xe0263b) : tier === 2 ? new THREE.MeshStandardMaterial({ color: 0x7dff6b, emissive: 0x2bff3a, emissiveIntensity: 1.2 }) : std(0xffffff);
-  const wingMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff6d0, emissiveIntensity: 0.6, side: THREE.DoubleSide });
+    : std(tier === 2 ? 0x7dff6b : 0xffffff, { emissive: tier === 2 ? 0x2bff3a : 0xfff1a0, emissiveIntensity: 1.8 });
+  const accent = tier === 1 ? std(0xe0263b) : tier === 2 ? std(0x7dff6b, { emissive: 0x2bff3a, emissiveIntensity: 1.2 }) : std(0xffffff);
+  const wingMat = std(0xffffff, { emissive: 0xfff6d0, emissiveIntensity: 0.6, doubleSide: true });
+  const feet: Node[] = [];
   for (const s of [-1, 1]) {
-    const foot = new THREE.Group();
+    const foot = group(parent, 'foot');
     foot.position.set(s * a.footX, a.footY, 0.04);
-    foot.add(box(0.15, 0.1, 0.28, upper, 0, 0.03, 0));
-    foot.add(box(0.16, 0.04, 0.3, sole, 0, -0.03, 0));
-    foot.add(box(0.012, 0.04, 0.16, accent, s * 0.077, 0.03, -0.02)); // side stripe
+    add(foot, box(0.15, 0.1, 0.28, upper, 0, 0.03, 0), box(0.16, 0.04, 0.3, sole, 0, -0.03, 0), box(0.012, 0.04, 0.16, accent, s * 0.077, 0.03, -0.02));
     if (tier === 3) {
-      const wing = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.1), wingMat);
-      wing.position.set(s * 0.1, 0.08, -0.08);
+      const wing = at(plane(0.16, 0.1, wingMat), s * 0.1, 0.08, -0.08);
       wing.rotation.set(0, s * 0.6, s * 0.4);
-      foot.add(wing);
+      add(foot, wing);
       addTick(wing, (t) => { wing.rotation.z = s * (0.4 + Math.sin(t / 90) * 0.35); });
     }
-    g.add(foot);
+    feet.push(foot);
   }
-  return g;
+  return feet;
 }
 
-function makeVest(tier: number, a: GearAnchors): THREE.Group {
-  const g = new THREE.Group();
+function makeVest(tier: number, a: GearAnchors): Node {
+  const g = group(null, 'vest');
   if (tier === 1) {
     // padded hoodie vest with a hood bunched behind the head and a zipper
-    const pad = std(0x4f5b3a, { roughness: 0.85 });
-    const vest = new THREE.Mesh(new THREE.CylinderGeometry(a.torsoR + 0.02, a.torsoR + 0.04, a.torsoH * 0.8, 14, 1, true), pad);
-    vest.position.y = a.torsoY + 0.05;
-    (vest.material as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
-    g.add(vest);
+    const pad = std(0x4f5b3a, { roughness: 0.85, doubleSide: true });
+    add(g, at(cyl(a.torsoR + 0.02, a.torsoR + 0.04, a.torsoH * 0.8, pad, { seg: 14, open: true }), 0, a.torsoY + 0.05, 0));
+    const quiltM = std(0x3c4630);
     for (const y of [-0.1, 0.05, 0.2]) {
-      const quilt = new THREE.Mesh(new THREE.TorusGeometry(a.torsoR + 0.035, 0.012, 4, 20), std(0x3c4630));
-      quilt.rotation.x = Math.PI / 2;
-      quilt.position.y = a.torsoY + y;
-      g.add(quilt);
+      const q = at(torus(a.torsoR + 0.035, 0.012, quiltM, 20), 0, a.torsoY + y, 0);
+      q.rotation.x = Math.PI / 2;
+      add(g, q);
     }
-    g.add(box(0.02, a.torsoH * 0.78, 0.02, std(0xd0d0d0, { metalness: 0.8 }), 0, a.torsoY + 0.05, a.torsoR + 0.04));
-    const hood = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.06, 6, 14), pad);
-    hood.position.set(0, a.shoulderY + 0.06, -0.12);
+    add(g, box(0.02, a.torsoH * 0.78, 0.02, std(0xd0d0d0, { metalness: 0.8 }), 0, a.torsoY + 0.05, a.torsoR + 0.04));
+    const hood = at(torus(0.16, 0.06, pad, 14), 0, a.shoulderY + 0.06, -0.12);
     hood.rotation.x = Math.PI / 2.4;
-    g.add(hood);
+    add(g, hood);
     return g;
   }
   const plate = tier === 2
     ? std(0xa9b2bf, { metalness: 0.55, roughness: 0.3 })
     : std(0xffc83d, { metalness: 0.55, roughness: 0.2, emissive: 0x5a3800, emissiveIntensity: 0.5 });
-  const trim = tier === 2 ? std(0x3a3f4b, { metalness: 0.7 }) : new THREE.MeshStandardMaterial({ color: 0xd9a0ff, emissive: 0xb46bff, emissiveIntensity: 1.8 });
+  const trim = tier === 2 ? std(0x3a3f4b, { metalness: 0.7 }) : std(0xd9a0ff, { emissive: 0xb46bff, emissiveIntensity: 1.8 });
   // chest and back plates
   for (const z of [1, -1]) {
-    const p = box(a.torsoR * 1.6, a.torsoH * 0.75, 0.07, plate, 0, a.torsoY + 0.06, z * (a.torsoR - 0.02));
-    g.add(p);
-    g.add(box(a.torsoR * 1.6, 0.03, 0.08, trim, 0, a.torsoY + 0.06 + a.torsoH * 0.37, z * (a.torsoR - 0.02)));
+    add(g,
+      box(a.torsoR * 1.6, a.torsoH * 0.75, 0.07, plate, 0, a.torsoY + 0.06, z * (a.torsoR - 0.02)),
+      box(a.torsoR * 1.6, 0.03, 0.08, trim, 0, a.torsoY + 0.06 + a.torsoH * 0.37, z * (a.torsoR - 0.02)));
   }
-  g.add(box(a.torsoR * 1.7, 0.08, a.torsoR * 2.05, trim, 0, a.torsoY - a.torsoH * 0.32, 0)); // belt
+  add(g, box(a.torsoR * 1.7, 0.08, a.torsoR * 2.05, trim, 0, a.torsoY - a.torsoH * 0.32, 0)); // belt
   // shoulder pads
   for (const s of [-1, 1]) {
-    const pad = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), plate);
-    pad.scale.set(1.1, 0.8, 1);
-    pad.position.set(s * a.shoulderX, a.shoulderY, 0);
+    const pad = at(sphere(0.13, plate, { seg: 12, slice: 0.5 }), s * a.shoulderX, a.shoulderY, 0);
+    pad.scaling.set(1.1, 0.8, 1);
     pad.rotation.z = -s * 0.35;
-    g.add(pad);
+    add(g, pad);
   }
   if (tier === 2) {
     // rivets on the chest
     const rv = std(0x5d6470, { metalness: 0.55 });
-    for (const x of [-0.12, 0.12]) for (const y of [-0.08, 0.12]) {
-      const r = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 4), rv);
-      r.position.set(x, a.torsoY + 0.06 + y, a.torsoR + 0.02);
-      g.add(r);
-    }
+    for (const x of [-0.12, 0.12]) for (const y of [-0.08, 0.12]) add(g, at(sphere(0.02, rv, { seg: 6 }), x, a.torsoY + 0.06 + y, a.torsoR + 0.02));
     return g;
   }
   // tier 3: gold helmet with a glowing visor, a chest gem, and an aura halo of sparkles
-  const helm = new THREE.Mesh(new THREE.SphereGeometry(a.headR + 0.035, 16, 10, 0, Math.PI * 2, 0, Math.PI / 1.8), plate);
-  helm.position.y = a.headY;
-  g.add(helm);
-  const visor = box(a.headR * 1.5, 0.06, 0.04, trim, 0, a.headY + 0.04, a.headR + 0.01);
-  g.add(visor);
-  const crest = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.16, 4), trim);
-  crest.position.y = a.headY + a.headR + 0.1;
-  g.add(crest);
-  const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), trim);
-  gem.position.set(0, a.torsoY + 0.12, a.torsoR + 0.05);
-  g.add(gem);
-  const sparkles = new THREE.Group();
-  const sp = new THREE.MeshBasicMaterial({ color: 0xffe9a0 });
+  add(g,
+    at(sphere(a.headR + 0.035, plate, { seg: 16, slice: 1 / 1.8 }), 0, a.headY, 0),
+    box(a.headR * 1.5, 0.06, 0.04, trim, 0, a.headY + 0.04, a.headR + 0.01),
+    at(cone(0.04, 0.16, trim, 4), 0, a.headY + a.headR + 0.1, 0));
+  const gem = at(octa(0.06, trim), 0, a.torsoY + 0.12, a.torsoR + 0.05);
+  add(g, gem);
+  const sparkles = group(g, 'sparkles');
+  const sp = basic(0xffe9a0);
   for (let i = 0; i < 6; i++) {
-    const s = new THREE.Mesh(new THREE.OctahedronGeometry(0.03), sp);
     const ang = (i / 6) * Math.PI * 2;
-    s.position.set(Math.cos(ang) * 0.5, 0, Math.sin(ang) * 0.5);
-    sparkles.add(s);
+    add(sparkles, at(octa(0.03, sp), Math.cos(ang) * 0.5, 0, Math.sin(ang) * 0.5));
   }
   sparkles.position.y = a.torsoY;
-  g.add(sparkles);
   addTick(sparkles, (t) => {
     sparkles.rotation.y = t / 700;
     sparkles.position.y = a.torsoY + Math.sin(t / 500) * 0.15;

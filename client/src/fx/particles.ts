@@ -1,8 +1,14 @@
-// A small pooled CPU particle system drawn with two THREE.Points batches
-// (one alpha-blended for dust and smoke, one additive for sparks and glows).
+// A small pooled CPU particle system drawn as two point clouds (one alpha-blended
+// for dust and smoke, one additive for sparks and glows), plus floating motes.
 // World coordinates follow the renderer: x -> x, game y -> z, height -> y.
 
-import * as THREE from 'three';
+import { Mesh } from '@babylonjs/core/Meshes/mesh';
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
+import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial';
+import { Effect } from '@babylonjs/core/Materials/effect';
+import type { Scene } from '@babylonjs/core/scene';
+import type { Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { lin } from '../bjs/kit.ts';
 
 export type Preset =
   | 'dust' // footstep puff
@@ -59,21 +65,27 @@ const SPECS: Record<Preset, Spec> = {
 };
 
 const MAX = 1400;
+const MOTES = 160;
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 
-const VERT = /* glsl */ `
-  attribute float size;
+Effect.ShadersStore.broPointsVertexShader = `
+  precision highp float;
+  attribute vec3 position;
   attribute vec4 rgba;
-  varying vec4 vColor;
+  attribute float size;
+  uniform mat4 worldView;
+  uniform mat4 projection;
   uniform float scale;
+  varying vec4 vColor;
   void main() {
     vColor = rgba;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    gl_PointSize = size * scale / -mv.z;
-    gl_Position = projectionMatrix * mv;
+    vec4 mv = worldView * vec4(position, 1.0);
+    gl_PointSize = size * scale / max(0.001, -mv.z);
+    gl_Position = projection * mv;
   }
 `;
-const FRAG = /* glsl */ `
+Effect.ShadersStore.broPointsFragmentShader = `
+  precision highp float;
   varying vec4 vColor;
   void main() {
     vec2 d = gl_PointCoord - 0.5;
@@ -81,38 +93,59 @@ const FRAG = /* glsl */ `
     if (r > 1.0) discard;
     float soft = smoothstep(1.0, 0.0, r);
     gl_FragColor = vec4(vColor.rgb, vColor.a * soft);
-    #include <colorspace_fragment>
   }
 `;
 
+class Cloud {
+  pos: Float32Array;
+  col: Float32Array;
+  siz: Float32Array;
+  mesh: Mesh;
+  mat: ShaderMaterial;
+
+  constructor(scene: Scene, n: number, additive: boolean, name: string) {
+    this.pos = new Float32Array(n * 3);
+    this.col = new Float32Array(n * 4);
+    this.siz = new Float32Array(n);
+    this.mesh = new Mesh(name, scene);
+    const vd = new VertexData();
+    vd.positions = this.pos;
+    vd.indices = Array.from({ length: n }, (_, i) => i);
+    vd.applyToMesh(this.mesh, true);
+    this.mesh.setVerticesData('rgba', this.col, true, 4);
+    this.mesh.setVerticesData('size', this.siz, true, 1);
+    this.mesh.alwaysSelectAsActiveMesh = true;
+    this.mesh.isPickable = false;
+    this.mesh.renderingGroupId = 1;
+    this.mat = new ShaderMaterial(name, scene, 'broPoints', {
+      attributes: ['position', 'rgba', 'size'],
+      uniforms: ['worldView', 'projection', 'scale'],
+      needAlphaBlending: true,
+    });
+    this.mat.pointsCloud = true;
+    this.mat.backFaceCulling = false;
+    this.mat.disableDepthWrite = true;
+    this.mat.alphaMode = additive ? 1 : 2; // ADD : COMBINE
+    this.mat.setFloat('scale', 600);
+    this.mesh.material = this.mat;
+  }
+
+  upload() {
+    this.mesh.updateVerticesData('position', this.pos);
+    this.mesh.updateVerticesData('rgba', this.col);
+    this.mesh.updateVerticesData('size', this.siz);
+  }
+}
+
 class Batch {
   pool: P[] = [];
-  geo = new THREE.BufferGeometry();
-  pos = new Float32Array(MAX * 3);
-  col = new Float32Array(MAX * 4);
-  siz = new Float32Array(MAX);
-  points: THREE.Points;
-  mat: THREE.ShaderMaterial;
+  cloud: Cloud;
 
-  constructor(additive: boolean) {
+  constructor(scene: Scene, additive: boolean) {
     for (let i = 0; i < MAX; i++) {
       this.pool.push({ alive: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1, size: 0, grow: 0, r: 1, g: 1, b: 1, a: 1, drag: 0, grav: 0 });
     }
-    this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
-    this.geo.setAttribute('rgba', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
-    this.geo.setAttribute('size', new THREE.BufferAttribute(this.siz, 1).setUsage(THREE.DynamicDrawUsage));
-    this.geo.setDrawRange(0, 0);
-    this.mat = new THREE.ShaderMaterial({
-      vertexShader: VERT,
-      fragmentShader: FRAG,
-      uniforms: { scale: { value: 600 } },
-      transparent: true,
-      depthWrite: false,
-      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
-    });
-    this.points = new THREE.Points(this.geo, this.mat);
-    this.points.frustumCulled = false;
-    this.points.renderOrder = 5;
+    this.cloud = new Cloud(scene, MAX, additive, additive ? 'fx-add' : 'fx-blend');
   }
 
   spawn(): P | null {
@@ -120,7 +153,9 @@ class Batch {
     return null;
   }
 
+  private live = 0;
   update(dt: number) {
+    const { pos, col, siz } = this.cloud;
     let n = 0;
     for (const p of this.pool) {
       if (!p.alive) continue;
@@ -133,52 +168,50 @@ class Batch {
       p.size = Math.max(0.005, p.size + p.grow * dt);
       const k = p.life / p.max;
       const fade = k < 0.15 ? k / 0.15 : 1 - (k - 0.15) / 0.85;
-      this.pos[n * 3] = p.x; this.pos[n * 3 + 1] = p.y; this.pos[n * 3 + 2] = p.z;
-      this.col[n * 4] = p.r; this.col[n * 4 + 1] = p.g; this.col[n * 4 + 2] = p.b; this.col[n * 4 + 3] = p.a * fade;
-      this.siz[n] = p.size;
+      pos[n * 3] = p.x; pos[n * 3 + 1] = p.y; pos[n * 3 + 2] = p.z;
+      col[n * 4] = p.r; col[n * 4 + 1] = p.g; col[n * 4 + 2] = p.b; col[n * 4 + 3] = p.a * fade;
+      siz[n] = p.size;
       n++;
     }
-    this.geo.setDrawRange(0, n);
-    for (const k of ['position', 'rgba', 'size']) (this.geo.getAttribute(k) as THREE.BufferAttribute).needsUpdate = true;
+    // clear the slots that were drawn last frame but are dead now
+    for (let i = n; i < this.live; i++) siz[i] = 0;
+    const changed = n > 0 || this.live > 0;
+    this.live = n;
+    this.cloud.mesh.setEnabled(n > 0);
+    if (changed) this.cloud.upload();
   }
 }
 
 export class Particles {
-  private normal = new Batch(false);
-  private additive = new Batch(true);
-  private tmp = new THREE.Color();
+  private normal: Batch;
+  private additive: Batch;
   /** Floating pollen / dust motes around the camera target in daylight. */
-  private motes: THREE.Points;
-  private motePos: Float32Array;
+  private motes: Cloud;
   private moteSeed: Float32Array;
-  private moteCenter = new THREE.Vector3();
+  private moteCenter = { x: 0, z: 0 };
+  private moteOpacity = 0.55;
   moteStrength = 1;
 
-  constructor(scene: THREE.Scene) {
-    scene.add(this.normal.points, this.additive.points);
-    const N = 160;
-    this.motePos = new Float32Array(N * 3);
-    this.moteSeed = new Float32Array(N * 4);
-    for (let i = 0; i < N; i++) {
+  constructor(scene: Scene) {
+    this.normal = new Batch(scene, false);
+    this.additive = new Batch(scene, true);
+    this.motes = new Cloud(scene, MOTES, true, 'fx-motes');
+    this.moteSeed = new Float32Array(MOTES * 4);
+    const c = lin(0xfff6d8);
+    for (let i = 0; i < MOTES; i++) {
       this.moteSeed[i * 4] = Math.random() * 30 - 15;
       this.moteSeed[i * 4 + 1] = Math.random() * 3 + 0.3;
       this.moteSeed[i * 4 + 2] = Math.random() * 30 - 15;
       this.moteSeed[i * 4 + 3] = Math.random() * 100;
+      this.motes.col.set([c.r, c.g, c.b, 0.55], i * 4);
+      this.motes.siz[i] = 0.06;
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(this.motePos, 3).setUsage(THREE.DynamicDrawUsage));
-    this.motes = new THREE.Points(g, new THREE.PointsMaterial({
-      color: 0xfff6d8, size: 0.06, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
-    this.motes.frustumCulled = false;
-    scene.add(this.motes);
   }
 
   /** Pixel height of the canvas, so point sizes stay in world units. */
-  setViewport(heightPx: number, fovDeg: number) {
-    const s = heightPx / (2 * Math.tan((fovDeg * Math.PI) / 360));
-    this.normal.mat.uniforms.scale.value = s;
-    this.additive.mat.uniforms.scale.value = s;
+  setViewport(heightPx: number, fovRad: number) {
+    const s = heightPx / (2 * Math.tan(fovRad / 2));
+    for (const c of [this.normal.cloud, this.additive.cloud, this.motes]) c.mat.setFloat('scale', s);
   }
 
   /** Emit a preset at world position (x, height, z). `dir` biases horizontal velocity. */
@@ -200,28 +233,32 @@ export class Particles {
       p.life = 0; p.max = rnd(s.life[0], s.life[1]);
       p.size = rnd(s.size[0], s.size[1]) * Math.sqrt(scale); p.grow = s.grow;
       p.drag = s.drag; p.grav = s.grav;
-      this.tmp.setHex(opts.color ?? s.colors[Math.floor(Math.random() * s.colors.length)]);
-      p.r = this.tmp.r; p.g = this.tmp.g; p.b = this.tmp.b; p.a = s.alpha ?? 1;
+      const c = lin(opts.color ?? s.colors[Math.floor(Math.random() * s.colors.length)]);
+      p.r = c.r; p.g = c.g; p.b = c.b; p.a = s.alpha ?? 1;
     }
   }
 
-  update(dt: number, center: THREE.Vector3, t: number) {
+  update(dt: number, center: Vector3, t: number) {
     this.normal.update(dt);
     this.additive.update(dt);
-    this.moteCenter.lerp(center, 1 - Math.exp(-dt * 3));
-    const N = this.motePos.length / 3;
-    for (let i = 0; i < N; i++) {
+    const k = 1 - Math.exp(-dt * 3);
+    this.moteCenter.x += (center.x - this.moteCenter.x) * k;
+    this.moteCenter.z += (center.z - this.moteCenter.z) * k;
+    this.moteOpacity += (0.55 * this.moteStrength - this.moteOpacity) * Math.min(1, dt * 2);
+    const on = this.moteOpacity > 0.02;
+    this.motes.mesh.setEnabled(on);
+    if (!on) return;
+    const { pos, col } = this.motes;
+    for (let i = 0; i < MOTES; i++) {
       const sx = this.moteSeed[i * 4], sy = this.moteSeed[i * 4 + 1], sz = this.moteSeed[i * 4 + 2], ph = this.moteSeed[i * 4 + 3];
       // wrap around the camera target so the field always surrounds the player
       const wx = ((sx + t * 0.25 + Math.sin(t * 0.3 + ph) * 0.6 - this.moteCenter.x) % 30 + 45) % 30 - 15;
       const wz = ((sz + Math.cos(t * 0.25 + ph) * 0.6 - this.moteCenter.z) % 30 + 45) % 30 - 15;
-      this.motePos[i * 3] = this.moteCenter.x + wx;
-      this.motePos[i * 3 + 1] = sy + Math.sin(t * 0.7 + ph) * 0.25;
-      this.motePos[i * 3 + 2] = this.moteCenter.z + wz;
+      pos[i * 3] = this.moteCenter.x + wx;
+      pos[i * 3 + 1] = sy + Math.sin(t * 0.7 + ph) * 0.25;
+      pos[i * 3 + 2] = this.moteCenter.z + wz;
+      col[i * 4 + 3] = this.moteOpacity;
     }
-    (this.motes.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
-    const m = this.motes.material as THREE.PointsMaterial;
-    m.opacity += (0.55 * this.moteStrength - m.opacity) * Math.min(1, dt * 2);
-    this.motes.visible = m.opacity > 0.02;
+    this.motes.upload();
   }
 }
