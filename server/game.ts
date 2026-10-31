@@ -1023,6 +1023,7 @@ export class Room {
     this.broadcast({ t: 'result', win, night: this.night, mvp });
     this.broadcast({ t: 'scores', rows: this.scoreRows() });
     this.feed.push({ k: 'info', text: win ? 'W. The bros touched grass.' : 'L + ratio. The Opps won.' });
+    if (this.ev.mode) this.endMode(); // sunrise: no power cut or fog over the results screen
     this.setPhase('touchgrass');
   }
 

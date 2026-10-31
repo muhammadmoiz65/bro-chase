@@ -149,7 +149,7 @@ class Game {
       case 'knockDone': hud.clearKnock(m.id); break;
       case 'scores': hud.scores(m.rows, this.selfId, this.lobby?.name ?? ''); break;
       case 'result':
-        hud.result(m.win, m.mvp);
+        hud.result(m.win, m.mvp, this.role);
         if ((m.win && this.role === 'bro') || (!m.win && this.role === 'opp')) {
           for (let i = 0; i < 3; i++) setTimeout(() => renderer.fx.particles.burst('confetti', this.me.x + (Math.random() - 0.5) * 2, 0.5, this.me.y + (Math.random() - 0.5) * 2), i * 250);
         }

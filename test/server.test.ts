@@ -364,3 +364,16 @@ test('maxed-out defences stun an Opp, but never keep it stunned all night', () =
     Date.now = realNow;
   }
 });
+
+test('a night that ends during a power cut brings the lights back for the results', () => {
+  const r = makeRoom();
+  const [a] = joinN(r, 1);
+  lockIn(r, a.id);
+  const ev = (r as any).ev;
+  Object.assign(ev, { mode: 'blackout', power: false, modeEnd: Date.now() / 1000 + 60, nextAt: Infinity });
+  r.phaseEnd = 0;
+  tick(r);
+  assert.equal(r.phase, 'touchgrass');
+  assert.equal(ev.power, true);
+  assert.equal(ev.mode, null);
+});
