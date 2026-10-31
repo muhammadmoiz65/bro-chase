@@ -77,7 +77,8 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   padding: 8px 16px; border-radius: 10px; font-weight: 800; text-align: center; max-width: calc(100% - 32px); animation: pulse 1s infinite alternate; }
 @keyframes pulse { from { filter: brightness(1); } to { filter: brightness(1.3); } }
 
-#feed { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; max-width: 46vw; }
+/* stops short of the centred phase title so long event lines never cover it */
+#feed { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; max-width: calc(50vw - 140px); }
 .feed-item { background: rgba(0, 0, 0, 0.62); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 13px; font-weight: 600;
   display: flex; gap: 6px; align-items: center; animation: feedIn .15s ease-out; transition: opacity .6s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .feed-item.mine { border-color: var(--pink); }
@@ -131,7 +132,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 @media (max-width: 760px) {
   #scoreboard .teams { grid-template-columns: 1fr; }
   #lobby-panel { top: auto; bottom: 220px; }
-  #feed { top: 100px; max-width: 60vw; }
+  #feed { top: 152px; max-width: 60vw; } /* below the event banner */
   #chat { bottom: 200px; width: 60vw; }
   #hint { bottom: 200px; font-size: 12px; white-space: normal; max-width: 70vw; text-align: center; }
   #bottom-left { width: 160px; }

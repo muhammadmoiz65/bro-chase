@@ -376,7 +376,7 @@ export class Hud {
     const ping = (r: ScoreRow) => (r.ai ? 'AI' : r.ping < 0 ? 'away' : `${r.ping}ms`);
     fill('score-bros', rows.filter((r) => r.role === 'bro'), [
       ['Name', (r) => `${r.n}${r.alive ? '' : ' (NPC)'}`], ['Score', (r) => r.score], ['Mogs', (r) => r.mogs],
-      ['Revives', (r) => r.revives], ['Let in', (r) => r.letIns], ["caught", (r) => r.caught], ['Ping', ping],
+      ['Revives', (r) => r.revives], ['Let in', (r) => r.letIns], ['Caught', (r) => r.caught], ['Ping', ping],
     ]);
     fill('score-six', rows.filter((r) => r.role === 'opp'), [
       ['Name', (r) => r.n], ['Score', (r) => r.score], ['Catches', (r) => r.catches], ['Ping', ping],

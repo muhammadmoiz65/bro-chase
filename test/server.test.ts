@@ -331,3 +331,36 @@ test('bros build defences in their crib; a Rizz Blaster stuns an Opp after 5 hit
   for (let i = 0; i < 20 * 6 && ai.stunUntil < Date.now() / 1000; i++) { ai.x = d.x + 3; ai.y = d.y; tick(r); }
   assert.ok(ai.stunUntil > Date.now() / 1000, 'stunned by the blaster');
 });
+
+test('maxed-out defences stun an Opp, but never keep it stunned all night', () => {
+  const realNow = Date.now;
+  let fake = realNow();
+  Date.now = () => fake;
+  try {
+    const r = makeRoom();
+    const [a] = joinN(r, 1);
+    const pa = r.players.get(a.id)!;
+    pa.cash = 99999;
+    const [cx, cy] = plotCenter(pa.crib);
+    for (const [ox, oy, k] of [[-2, -2, 'blaster'], [2, -2, 'blaster'], [-2, 2, 'lamp'], [2, 2, 'bass']] as const) {
+      [pa.x, pa.y] = [cx + ox, cy + oy];
+      r.handle(a.id, { t: 'build', kind: k });
+    }
+    for (const k of ['blaster', 'blaster', 'lamp', 'lamp', 'bass', 'bass'] as const) r.handle(a.id, { t: 'upgrade', kind: k });
+    assert.equal(r.defs.length, 4);
+    lockIn(r, a.id);
+    const ai = r.ais[0];
+    let stunned = 0, free = 0;
+    for (let i = 0; i < 20 * 30; i++) {
+      fake += 50;
+      // pin the Opp at the front door, in range of everything
+      [ai.x, ai.y] = [cx, cy + 4.6]; ai.path = []; ai.replanAt = Infinity;
+      tick(r);
+      if (ai.stunUntil > fake / 1000) stunned++; else free++;
+    }
+    assert.ok(stunned > 0, "defences do stun it");
+    assert.ok(free > 20 * 10, `the Opp gets real time to act (free ${free / 20}s of 30s)`);
+  } finally {
+    Date.now = realNow;
+  }
+});

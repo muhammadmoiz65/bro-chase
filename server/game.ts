@@ -871,7 +871,8 @@ export class Room {
         continue;
       }
       if (d.cd > 0) continue;
-      const targets = hunters.filter((h) => t >= h.stunUntil && dist(h.x, h.y, d.x, d.y) < range);
+      // a grace window after every stun so a stack of turrets can't keep an Opp frozen all night
+      const targets = hunters.filter((h) => t >= h.stunUntil + DEF.stunGraceSec && dist(h.x, h.y, d.x, d.y) < range);
       if (!targets.length) continue;
       const h = targets.sort((a, b) => dist(a.x, a.y, d.x, d.y) - dist(b.x, b.y, d.x, d.y))[0];
       if (d.k === 'blaster') {
