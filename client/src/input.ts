@@ -1,11 +1,12 @@
 // Keyboard + touch input. Emits a movement vector and discrete actions.
 
-export type Action = 'jump' | 'light' | 'use' | 'repairOn' | 'repairOff' | 'yes' | 'no' | 'scoreOn' | 'scoreOff' | 'chat' | 'zoomToggle';
+export type Action = 'jump' | 'light' | 'use' | 'repairOn' | 'repairOff' | 'yes' | 'no' | 'scoreOn' | 'scoreOff' | 'chat' | 'zoomToggle' | 'walkToggle' | 'camIn' | 'camOut' | 'controls';
 
 export class Input {
   private keys = new Set<string>();
   private stick = { x: 0, y: 0 };
   private zoomLatch = false;
+  sneakLatch = false;
   enabled = true;
   onAction: (a: Action) => void = () => {};
 
@@ -23,6 +24,10 @@ export class Input {
       else if (k === 'r') this.onAction('repairOn');
       else if (k === 'y') this.onAction('yes');
       else if (k === 'n') this.onAction('no');
+      else if (k === 'c') { this.sneakLatch = !this.sneakLatch; this.onAction('walkToggle'); }
+      else if (k === '=' || k === '+') this.onAction('camIn');
+      else if (k === '-' || k === '_') this.onAction('camOut');
+      else if (k === 'h') this.onAction('controls');
     });
     window.addEventListener('keyup', (e) => {
       const k = e.key.toLowerCase();
@@ -30,12 +35,13 @@ export class Input {
       if (k === 'tab') { e.preventDefault(); this.onAction('scoreOff'); }
       if (k === 'r') this.onAction('repairOff');
     });
+    window.addEventListener('wheel', (e) => { if (this.enabled) this.onAction(e.deltaY < 0 ? 'camIn' : 'camOut'); }, { passive: true });
     window.addEventListener('blur', () => { this.keys.clear(); this.onAction('repairOff'); this.onAction('scoreOff'); });
   }
 
   clear() { this.keys.clear(); }
 
-  move(): { dx: number; dy: number; zoom: boolean } {
+  move(): { dx: number; dy: number; zoom: boolean; sneak: boolean } {
     let dx = 0, dy = 0;
     if (this.enabled) {
       if (this.keys.has('w') || this.keys.has('arrowup')) dy -= 1;
@@ -48,7 +54,8 @@ export class Input {
     const len = Math.hypot(dx, dy);
     if (len > 1) { dx /= len; dy /= len; }
     const zoom = this.enabled && (this.keys.has('shift') || this.zoomLatch);
-    return { dx: +dx.toFixed(3), dy: +dy.toFixed(3), zoom };
+    const sneak = !zoom && (this.sneakLatch || this.keys.has('control'));
+    return { dx: +dx.toFixed(3), dy: +dy.toFixed(3), zoom, sneak };
   }
 
   /** On-screen joystick and buttons for phones and tablets. */
@@ -85,6 +92,7 @@ export class Input {
         else if (act === 'score') this.onAction('scoreOn');
         else if (act === 'chat') this.onAction('chat');
         else if (act === 'zoom') { this.zoomLatch = !this.zoomLatch; b.classList.toggle('on', this.zoomLatch); }
+        else if (act === 'walk') { this.sneakLatch = !this.sneakLatch; b.classList.toggle('on', this.sneakLatch); this.onAction('walkToggle'); }
       });
       b.addEventListener('touchend', (e) => {
         e.preventDefault();

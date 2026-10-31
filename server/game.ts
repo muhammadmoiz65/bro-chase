@@ -1,14 +1,14 @@
 // One game room: a shared, growing neighbourhood of cribs, its bros, and the
-// Sixsevens hunting them. The server is the only source of truth; clients send
+// Bill Collectors hunting them. The server is the only source of truth; clients send
 // inputs and receive filtered snapshots.
 
 import type { WebSocket } from 'ws';
 import {
-  AURA, BROS_PER_MONSTER, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
+  AURA, AURA_DELTA, BROS_PER_MONSTER, CATCH_RANGE, DOOR, EVENTS, INTEREST_RADIUS, JUMP, MOG_STUN_SEC, NOISE,
   PHASE_SEC, PLOT, RECONNECT_GRACE_SEC, REVIVE_RANGE, REVIVE_SEC, RING_LIGHT_RANGE, SPEED, TICK_RATE, VISION,
 } from '../shared/constants.ts';
 import type {
-  ClientMsg, DropView, EntView, FeedItem, LobbyInfo, NoiseView, Phase, Role, ScoreRow, SelfView, ServerMsg,
+  ClientMsg, DropView, EntView, FeedItem, LobbyInfo, ModeName, NoiseKind, NoiseView, Phase, Role, ScoreRow, SelfView, ServerMsg,
 } from '../shared/protocol.ts';
 import {
   cellAt, cribSpawn, dist, doorBlocks, doorCells, doorCenter, GENERATOR_POS, move, overFence, plotCenter,
@@ -39,7 +39,7 @@ interface Player {
   npc: boolean; // caught, ghost mode
   light: boolean;
   aura: number;
-  input: { dx: number; dy: number; zoom: boolean };
+  input: { dx: number; dy: number; zoom: boolean; sneak: boolean };
   jumpT: number; jumpCd: number;
   crib: number;
   stunUntil: number; stunFrom: [number, number];
@@ -66,7 +66,7 @@ interface Ai {
   stats: RoundStats;
 }
 
-interface Noise { id: number; x: number; y: number; r: number; t: number; src: string | null }
+interface Noise { id: number; x: number; y: number; r: number; t: number; src: string | null; k: NoiseKind }
 interface Knock { id: number; from: string; owner: string; plot: number; side: DoorSide; expires: number }
 
 let noiseSeq = 1;
@@ -93,7 +93,7 @@ export class Room {
   drops: Array<{ id: number; x: number; y: number }> = [];
   knocks = new Map<number, Knock>();
   feed: FeedItem[] = [];
-  ev = { power: true, outageEnd: 0, powerWork: 0, fogEnd: 0, rageEnd: 0, nextAt: 0 };
+  ev = { power: true, powerWork: 0, mode: null as ModeName | null, modeEnd: 0, nextAt: 0 };
   private tickN = 0;
   private timer: NodeJS.Timeout | null = null;
   private dropT = 0;
@@ -127,12 +127,12 @@ export class Room {
   // ---------- membership ----------
 
   get bros() { return [...this.players.values()].filter((p) => p.role === 'bro'); }
-  get sixPlayers() { return [...this.players.values()].filter((p) => p.role === 'sixseven'); }
+  get collectorPlayers() { return [...this.players.values()].filter((p) => p.role === 'collector'); }
   get connectedCount() { return [...this.players.values()].filter((p) => p.ws).length; }
 
-  private canBeSixseven(excludeId?: string): boolean {
+  private canBeCollector(excludeId?: string): boolean {
     const bros = this.bros.filter((p) => p.id !== excludeId).length;
-    const six = this.sixPlayers.filter((p) => p.id !== excludeId).length;
+    const six = this.collectorPlayers.filter((p) => p.id !== excludeId).length;
     return (six + 1) * BROS_PER_MONSTER <= bros;
   }
 
@@ -150,13 +150,13 @@ export class Room {
       p.name = name;
     } else {
       let role: Role = 'bro';
-      if (wantRole === 'sixseven') {
-        if (this.canBeSixseven()) role = 'sixseven';
-        else notice = `Sixseven slots need ${BROS_PER_MONSTER} bros each. You're a bro for now; the AI plays the Sixseven.`;
+      if (wantRole === 'collector') {
+        if (this.canBeCollector()) role = 'collector';
+        else notice = `Bill Collector slots need ${BROS_PER_MONSTER} bros each. You're a bro for now; the AI plays the Bill Collector.`;
       }
       p = {
         id: accountId, name, role, ws, leftAt: 0, x: 0, y: 0, npc: false, light: false, aura: AURA.start,
-        input: { dx: 0, dy: 0, zoom: false }, jumpT: 0, jumpCd: 0, crib: -1, stunUntil: 0, stunFrom: [0, 0],
+        input: { dx: 0, dy: 0, zoom: false, sneak: false }, jumpT: 0, jumpCd: 0, crib: -1, stunUntil: 0, stunFrom: [0, 0],
         repairing: false, rv: 0, hue: hueOf(accountId), stats: freshStats(), ping: 0, stepT: 0,
         repairNoiseT: 0, smashCd: 0, chatTimes: [],
       };
@@ -164,7 +164,7 @@ export class Room {
       if (role === 'bro') this.giveCrib(p);
       this.spawn(p);
       this.feed.push({ k: 'join', a: name });
-      this.systemChat(`${name} joined${role === 'sixseven' ? ' as a Sixseven' : ''}.`);
+      this.systemChat(`${name} joined${role === 'collector' ? ' as a Bill Collector' : ''}.`);
       if (!this.hostId && !this.quick) this.hostId = accountId;
     }
     this.emptySince = 0;
@@ -176,7 +176,7 @@ export class Room {
     if (!p || p.ws !== ws) return;
     p.ws = null;
     p.leftAt = now();
-    p.input = { dx: 0, dy: 0, zoom: false };
+    p.input = { dx: 0, dy: 0, zoom: false, sneak: false };
     p.repairing = false;
     if (this.connectedCount === 0) this.emptySince = now();
   }
@@ -260,11 +260,11 @@ export class Room {
         let dx = Number(msg.dx) || 0, dy = Number(msg.dy) || 0;
         const len = Math.hypot(dx, dy);
         if (len > 1) { dx /= len; dy /= len; }
-        p.input = { dx, dy, zoom: !!msg.zoom };
+        p.input = { dx, dy, zoom: !!msg.zoom, sneak: !!msg.sneak && !msg.zoom };
         break;
       }
       case 'jump':
-        if (p.role === 'bro' && !p.npc && p.jumpT <= 0 && p.jumpCd <= 0) p.jumpT = JUMP.sec;
+        if (p.role === 'bro' && !p.npc && p.jumpT <= 0 && p.jumpCd <= 0) p.jumpT = this.jumpSec;
         break;
       case 'light':
         if (p.role === 'bro' && !p.npc) p.light = !p.light && p.aura > 0;
@@ -285,24 +285,24 @@ export class Room {
   }
 
   private switchRole(p: Player, role: Role) {
-    if (role !== 'bro' && role !== 'sixseven') return;
+    if (role !== 'bro' && role !== 'collector') return;
     if (p.role === role) return;
     if (this.phase === 'lockin') {
       this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', text: 'You can switch roles between nights.', sys: true });
       return;
     }
-    if (role === 'sixseven' && !this.canBeSixseven(p.id)) {
+    if (role === 'collector' && !this.canBeCollector(p.id)) {
       this.sendTo(p, {
         t: 'chat', from: 'server', role: 'bro', sys: true,
-        text: `Not enough bros: each Sixseven needs ${BROS_PER_MONSTER} bros.`,
+        text: `Not enough bros: each Bill Collector needs ${BROS_PER_MONSTER} bros.`,
       });
       return;
     }
     p.role = role;
-    if (role === 'sixseven') this.releaseCrib(p);
+    if (role === 'collector') this.releaseCrib(p);
     else this.giveCrib(p);
     this.spawn(p);
-    this.systemChat(`${p.name} is now ${role === 'bro' ? 'a bro' : 'a Sixseven'}.`);
+    this.systemChat(`${p.name} is now ${role === 'bro' ? 'a bro' : 'a Bill Collector'}.`);
   }
 
   private use(p: Player) {
@@ -321,24 +321,24 @@ export class Room {
     const crib = this.cribs.get(best.plot)!;
     const door = crib.doors[best.side];
     const [dx, dy] = doorCenter(best.plot, best.side);
-    if (p.role === 'sixseven') {
+    if (p.role === 'collector') {
       if (p.smashCd > 0 || !doorBlocks(door) || now() < p.stunUntil) return;
       p.smashCd = DOOR.playerSmashCooldown;
       this.hitDoor(best.plot, best.side, DOOR.playerSmash, p.name, p.stats);
-      this.noise(dx, dy, NOISE.smash, p.id);
+      this.noise(dx, dy, NOISE.smash, p.id, 'smash');
       return;
     }
     if (crib.owner === p.id) {
       if (door.hp <= 0) return;
       door.open = !door.open;
       door.openUntil = door.open ? now() + DOOR.openSec : 0;
-      this.noise(dx, dy, NOISE.door, p.id);
+      this.noise(dx, dy, NOISE.door, p.id, 'door');
       return;
     }
     // someone else's crib: knock and wait for their approval
     if (!doorBlocks(door)) return;
     for (const k of this.knocks.values()) if (k.from === p.id && k.plot === best.plot) return;
-    this.noise(dx, dy, NOISE.knock, p.id);
+    this.noise(dx, dy, NOISE.knock, p.id, 'knock');
     const owner = this.players.get(crib.owner!);
     if (!owner || !owner.ws) {
       this.sendTo(p, { t: 'chat', from: 'server', role: 'bro', sys: true, text: `${crib.ownerName}'s not home. The door stays locked.` });
@@ -364,11 +364,13 @@ export class Room {
         door.openUntil = now() + DOOR.openSec + 1;
       }
       const [dx, dy] = doorCenter(k.plot, k.side);
-      this.noise(dx, dy, NOISE.door, owner.id);
+      this.noise(dx, dy, NOISE.door, owner.id, 'door');
       owner.stats.letIns++;
       owner.stats.score += 5;
+      this.auraDelta(owner, AURA_DELTA.letIn, 'let a bro in');
       if (from) this.feed.push({ k: 'letin', a: owner.name, b: from.name });
     } else if (from) {
+      this.auraDelta(owner, AURA_DELTA.refuse, 'left a bro outside');
       this.sendTo(from, { t: 'chat', from: 'server', role: 'bro', sys: true, text: `${owner.name} said nah. Find another crib!` });
     }
   }
@@ -393,9 +395,19 @@ export class Room {
 
   // ---------- simulation ----------
 
-  private noise(x: number, y: number, r: number, src: string | null) {
-    this.noises.push({ id: noiseSeq++, x, y, r, t: now(), src });
+  private noise(x: number, y: number, r: number, src: string | null, k: NoiseKind) {
+    this.noises.push({ id: noiseSeq++, x, y, r, t: now(), src, k });
   }
+
+  private auraDelta(p: Player, d: number, why: string) {
+    const before = p.aura;
+    p.aura = Math.max(0, Math.min(AURA.max, p.aura + d));
+    const real = Math.round(p.aura - before);
+    if (real !== 0 || d < 0) this.sendTo(p, { t: 'aura', d: real || d, why });
+  }
+
+  private get jumpSec() { return this.ev.mode === 'lowgrav' ? JUMP.lowGravSec : JUMP.sec; }
+  private get jumpHeight() { return this.ev.mode === 'lowgrav' ? JUMP.lowGravHeight : JUMP.height; }
 
   private hitDoor(plot: number, side: DoorSide, dmg: number, by: string, stats: RoundStats) {
     const c = this.cribs.get(plot);
@@ -416,14 +428,14 @@ export class Room {
     if (phase === 'pregame') {
       this.reset();
       this.phaseEnd = t + this.phaseSec.pregame;
-      this.systemChat('Pregame: grab aura drops and get to your crib. The Sixsevens come out soon.');
+      this.systemChat('Pregame: grab aura drops and get to your crib. The Bill Collectors come out soon.');
     } else if (phase === 'lockin') {
       this.night++;
       this.phaseEnd = t + this.phaseSec.lockin;
       this.ev.nextAt = t + EVENTS.firstAfterSec;
-      for (const p of this.sixPlayers) [p.x, p.y] = this.edgeSpawn();
+      for (const p of this.collectorPlayers) [p.x, p.y] = this.edgeSpawn();
       this.adjustAis(true);
-      this.feed.push({ k: 'info', text: 'LOCK IN. The Sixsevens are out.' });
+      this.feed.push({ k: 'info', text: 'LOCK IN. The Bill Collectors are out.' });
     } else if (phase === 'touchgrass') {
       this.phaseEnd = t + this.phaseSec.touchgrass;
     } else {
@@ -436,13 +448,13 @@ export class Room {
     this.ais = [];
     this.knocks.clear();
     this.noises = [];
-    this.ev = { power: true, outageEnd: 0, powerWork: 0, fogEnd: 0, rageEnd: 0, nextAt: 0 };
-    // enforce the 4:1 ratio for player Sixsevens between nights
-    for (const p of this.sixPlayers) {
-      if (!this.canBeSixseven(p.id)) {
+    this.ev = { power: true, powerWork: 0, mode: null, modeEnd: 0, nextAt: 0 };
+    // enforce the 4:1 ratio for player Bill Collectors between nights
+    for (const p of this.collectorPlayers) {
+      if (!this.canBeCollector(p.id)) {
         p.role = 'bro';
         this.giveCrib(p);
-        this.systemChat(`${p.name} is back to being a bro (not enough bros for another Sixseven).`);
+        this.systemChat(`${p.name} is back to being a bro (not enough bros for another Bill Collector).`);
       }
     }
     for (const c of this.cribs.values()) for (const d of c.doors) { d.hp = DOOR.maxHp; d.open = false; d.openUntil = 0; }
@@ -466,21 +478,21 @@ export class Room {
     }
     this.broadcast({ t: 'result', win, night: this.night, mvp });
     this.broadcast({ t: 'scores', rows: this.scoreRows() });
-    this.feed.push({ k: 'info', text: win ? 'W. The bros touched grass.' : 'L + ratio. The Sixsevens won.' });
+    this.feed.push({ k: 'info', text: win ? 'W. The bros touched grass.' : 'L + ratio. The Bill Collectors won.' });
     this.setPhase('touchgrass');
   }
 
   private adjustAis(initial = false) {
-    const want = Math.max(0, Math.ceil(this.bros.length / BROS_PER_MONSTER) - this.sixPlayers.length);
+    const want = Math.max(0, Math.ceil(this.bros.length / BROS_PER_MONSTER) - this.collectorPlayers.length);
     while (this.ais.length < want) {
       const [x, y] = this.edgeSpawn();
       const n = aiSeq++;
       this.ais.push({
-        id: `ai-${n}`, name: `Sixseven #${this.ais.length + 1}`, x, y, path: [], goal: null, chase: null, chaseUntil: 0,
+        id: `ai-${n}`, name: `Bill Collector #${this.ais.length + 1}`, x, y, path: [], goal: null, chase: null, chaseUntil: 0,
         replanAt: 0, stunUntil: 0, stunFrom: [0, 0], smashNoiseT: 0, hunchAt: now() + 6 + Math.random() * 6,
         stats: freshStats(),
       });
-      if (!initial) this.feed.push({ k: 'info', text: 'Another Sixseven crawled out.' });
+      if (!initial) this.feed.push({ k: 'info', text: 'Another Bill Collector crawled out.' });
     }
     if (this.ais.length > want) this.ais.length = want;
   }
@@ -532,37 +544,47 @@ export class Room {
 
   private stepEvents(t: number) {
     const ev = this.ev;
-    if (!ev.power && t >= ev.outageEnd) this.restorePower(null);
-    if (this.phase !== 'lockin' || t < ev.nextAt) return;
+    if (ev.mode && t >= ev.modeEnd) this.endMode(null);
+    if (this.phase !== 'lockin' || ev.mode || t < ev.nextAt) return;
     ev.nextAt = t + EVENTS.gapMinSec + Math.random() * (EVENTS.gapMaxSec - EVENTS.gapMinSec);
-    const options = ['outage', 'aurarain', 'fog'];
-    if (this.ais.length + this.sixPlayers.length > 0) options.push('rage', 'outage');
+    const options: Array<ModeName | 'aurarain'> = ['blackout', 'blackout', 'fog', 'lowgrav', 'disco', 'aurarain'];
+    if (this.ais.length + this.collectorPlayers.length > 0) options.push('rage');
     const pick = options[Math.floor(Math.random() * options.length)];
-    if (pick === 'outage' && ev.power) {
-      ev.power = false;
-      ev.outageEnd = t + EVENTS.outageSec;
-      ev.powerWork = 0;
-      this.feed.push({ k: 'event', text: 'POWER FAILURE. Fix the generator in the plaza (hold R).' });
-    } else if (pick === 'fog') {
-      ev.fogEnd = t + EVENTS.fogSec;
-      this.feed.push({ k: 'event', text: 'Ohio fog rolled in. You can barely see.' });
-    } else if (pick === 'rage') {
-      ev.rageEnd = t + EVENTS.rageSec;
-      this.feed.push({ k: 'event', text: 'SIXSEVEN RAGE. They are faster for a bit.' });
-    } else {
+    if (pick === 'aurarain') {
       for (let i = 0; i < EVENTS.auraRainDrops; i++) {
         const [x, y] = this.randomStreet();
         this.drops.push({ id: dropSeq++, x, y });
       }
-      this.feed.push({ k: 'event', text: 'Aura rain! Free aura in the streets.' });
+      this.feed.push({ k: 'event', text: 'AURA RAIN! Free aura in the streets.' });
+      return;
     }
+    ev.mode = pick;
+    ev.modeEnd = t + EVENTS.minSec + Math.random() * (EVENTS.maxSec - EVENTS.minSec);
+    const text: Record<ModeName, string> = {
+      blackout: 'POWER CUT! Lights out. Fix the generator in the plaza (hold R) to end it early.',
+      fog: 'OHIO FOG rolled in. You can barely see.',
+      rage: 'BILL COLLECTOR RAGE. Late fees doubled: they are faster.',
+      lowgrav: 'LOW GRAVITY. Jumps go way higher.',
+      disco: 'DISCO MODE. The music confuses the Bill Collectors: they hear less.',
+    };
+    if (pick === 'blackout') { ev.power = false; ev.powerWork = 0; }
+    this.feed.push({ k: 'event', text: text[pick] });
+  }
+
+  private endMode(by: Player | null) {
+    const was = this.ev.mode;
+    this.ev.mode = null;
+    this.ev.modeEnd = 0;
+    if (was === 'blackout') this.restorePower(by);
   }
 
   private restorePower(by: Player | null) {
+    if (this.ev.mode === 'blackout') { this.ev.mode = null; this.ev.modeEnd = 0; }
     this.ev.power = true;
     this.ev.powerWork = 0;
     if (by) {
       by.stats.score += 10;
+      this.auraDelta(by, AURA_DELTA.generator, 'fixed the generator');
       this.feed.push({ k: 'event', text: `${by.name} fixed the generator. Power's back.` });
     } else {
       this.feed.push({ k: 'event', text: 'Power came back on.' });
@@ -570,14 +592,14 @@ export class Room {
   }
 
   private stepPlayers(t: number) {
-    const rage = t < this.ev.rageEnd;
+    const rage = this.ev.mode === 'rage';
     for (const p of this.players.values()) {
       p.smashCd = Math.max(0, p.smashCd - DT);
       p.jumpCd = Math.max(0, p.jumpCd - DT);
       const { dx, dy, zoom } = p.input;
       const moving = dx !== 0 || dy !== 0;
 
-      if (p.role === 'sixseven') {
+      if (p.role === 'collector') {
         if (t < p.stunUntil) {
           const a = Math.atan2(p.y - p.stunFrom[1], p.x - p.stunFrom[0]);
           [p.x, p.y] = move(p.x, p.y, Math.cos(a) * 2 * DT, Math.sin(a) * 2 * DT, this.R, this.doorLookup);
@@ -602,16 +624,17 @@ export class Room {
         p.jumpT -= DT;
         if (p.jumpT <= 0) {
           if (overFence(p.x, p.y, this.R)) p.jumpT = 0.05; // keep floating until clear of the fence
-          else { p.jumpT = 0; p.jumpCd = JUMP.cooldown; this.noise(p.x, p.y, JUMP.landNoise, p.id); }
+          else { p.jumpT = 0; p.jumpCd = JUMP.cooldown; this.noise(p.x, p.y, JUMP.landNoise, p.id, 'land'); }
         }
       }
       const airborne = p.jumpT > 0;
-      const sp = zoom ? SPEED.zoom : SPEED.walk;
+      const sneak = p.input.sneak;
+      const sp = zoom ? SPEED.zoom : sneak ? SPEED.sneak : SPEED.walk;
       if (moving) {
         [p.x, p.y] = move(p.x, p.y, dx * sp * DT, dy * sp * DT, this.R, this.doorLookup, { airborne });
         if ((p.stepT -= DT) <= 0 && !airborne) {
-          p.stepT = zoom ? 0.35 : 0.6;
-          this.noise(p.x, p.y, zoom ? NOISE.zoom : NOISE.walk, p.id);
+          p.stepT = zoom ? 0.3 : sneak ? 0.7 : 0.45;
+          this.noise(p.x, p.y, zoom ? NOISE.zoom : sneak ? NOISE.sneak : NOISE.walk, p.id, zoom ? 'zoom' : 'step');
         }
       }
       if (p.light) {
@@ -632,6 +655,7 @@ export class Room {
           p.rv = 0;
           helper.stats.revives++;
           helper.stats.score += 15;
+          this.auraDelta(helper, AURA_DELTA.revive, 'revived a bro');
           this.feed.push({ k: 'revive', a: helper.name, b: p.name });
         }
       } else {
@@ -668,11 +692,11 @@ export class Room {
   private makeRepairNoise(p: Player) {
     if ((p.repairNoiseT -= DT) <= 0) {
       p.repairNoiseT = 0.5;
-      this.noise(p.x, p.y, NOISE.repair, p.id);
+      this.noise(p.x, p.y, NOISE.repair, p.id, 'repair');
     }
   }
 
-  /** Ring-light mogs and catches, for both AI and player Sixsevens. */
+  /** Ring-light mogs and catches, for both AI and player Bill Collectors. */
   private hunterChecks(h: { x: number; y: number; name: string; stunUntil: number; stunFrom: [number, number]; stats: RoundStats }, t: number) {
     if (t < h.stunUntil) return;
     for (const b of this.bros) {
@@ -680,11 +704,11 @@ export class Room {
       if (dist(h.x, h.y, b.x, b.y) < RING_LIGHT_RANGE) {
         h.stunUntil = t + MOG_STUN_SEC;
         h.stunFrom = [b.x, b.y];
-        b.aura = Math.max(0, b.aura - AURA.mogCost);
+        this.auraDelta(b, -AURA.mogCost + AURA_DELTA.mogBonus, 'ring light mog');
         if (b.aura <= 0) b.light = false;
         b.stats.mogs++;
         b.stats.score += 10;
-        this.noise(h.x, h.y, NOISE.mog, null);
+        this.noise(h.x, h.y, NOISE.mog, null, 'mog');
         this.feed.push({ k: 'mog', a: b.name, b: h.name });
         return;
       }
@@ -695,6 +719,7 @@ export class Room {
         b.npc = true;
         b.light = false;
         b.rv = 0;
+        this.auraDelta(b, -Math.round(b.aura / 2), 'got collected');
         b.stats.caught++;
         h.stats.catches++;
         h.stats.score += 20;
@@ -715,7 +740,7 @@ export class Room {
   }
 
   private stepAis(t: number) {
-    const rage = t < this.ev.rageEnd;
+    const rage = this.ev.mode === 'rage';
     const minute = Math.max(0, (this.phaseSec.lockin - (this.phaseEnd - t)) / 60);
     const base = Math.min(SPEED.monsterAiMax, SPEED.monsterAi + minute * 0.18);
     const speed = base * (rage ? EVENTS.rageSpeed : 1) * (this.ev.power ? 1 : 1.1);
@@ -746,7 +771,7 @@ export class Room {
       let bestScore = 0;
       for (const n of this.noises) {
         const d = dist(n.x, n.y, ai.x, ai.y);
-        if (d > n.r + 0.5) continue;
+        if (d > (this.ev.mode === 'disco' ? n.r * 0.5 : n.r) + 0.5) continue;
         const score = n.r / (1 + d) + (t - n.t < 0.6 ? 1 : 0);
         if (score > bestScore) {
           bestScore = score;
@@ -794,7 +819,7 @@ export class Room {
         const [dx, dy] = doorCenter(c.plot, c.side!);
         if (dist(ai.x, ai.y, dx, dy) < 1.5) {
           this.hitDoor(c.plot, c.side!, DOOR.aiDamagePerSec * DT, ai.name, ai.stats);
-          if ((ai.smashNoiseT -= DT) <= 0) { ai.smashNoiseT = 0.5; this.noise(dx, dy, NOISE.smash, null); }
+          if ((ai.smashNoiseT -= DT) <= 0) { ai.smashNoiseT = 0.5; this.noise(dx, dy, NOISE.smash, null, 'smash'); }
           return;
         }
       }
@@ -835,7 +860,7 @@ export class Room {
       const i = this.drops.findIndex((d) => dist(d.x, d.y, b.x, b.y) < 0.8);
       if (i >= 0) {
         this.drops.splice(i, 1);
-        b.aura = Math.min(AURA.max, b.aura + AURA.drop);
+        this.auraDelta(b, AURA.drop, 'aura drop');
       }
     }
   }
@@ -864,13 +889,13 @@ export class Room {
 
   scoreRows(): ScoreRow[] {
     const rows: ScoreRow[] = [...this.players.values()].map((p) => ({
-      id: p.id, n: p.name, role: p.role, alive: p.role === 'sixseven' || !p.npc, score: Math.round(p.stats.score),
+      id: p.id, n: p.name, role: p.role, alive: p.role === 'collector' || !p.npc, score: Math.round(p.stats.score),
       catches: p.stats.catches, mogs: p.stats.mogs, revives: p.stats.revives, letIns: p.stats.letIns,
       caught: p.stats.caught, ping: p.ws ? p.ping : -1,
     }));
     for (const ai of this.ais) {
       rows.push({
-        id: ai.id, n: ai.name, role: 'sixseven', alive: true, score: Math.round(ai.stats.score), catches: ai.stats.catches,
+        id: ai.id, n: ai.name, role: 'collector', alive: true, score: Math.round(ai.stats.score), catches: ai.stats.catches,
         mogs: 0, revives: 0, letIns: 0, caught: 0, ping: 0, ai: true,
       });
     }
@@ -894,32 +919,36 @@ export class Room {
 
   private sendSnapshots() {
     const t = now();
-    const fog = t < this.ev.fogEnd;
+    const fog = this.ev.mode === 'fog';
     const sendCribs = this.tickN % 4 === 0;
     const sendDrops = this.tickN % 10 === 0;
     const cribs = sendCribs ? this.cribViews() : undefined;
 
     const all: Array<EntView & { lit: boolean }> = [];
     for (const p of this.players.values()) {
-      const z = p.jumpT > 0 ? Math.sin(Math.PI * (1 - p.jumpT / JUMP.sec)) * JUMP.height : 0;
+      const z = p.jumpT > 0 ? Math.max(0, Math.sin(Math.PI * (1 - p.jumpT / this.jumpSec))) * this.jumpHeight : 0;
       all.push({
-        id: p.id, k: p.role === 'sixseven' ? 'sixseven' : p.npc ? 'npc' : 'bro', x: +p.x.toFixed(2), y: +p.y.toFixed(2), n: p.name,
+        id: p.id, k: p.role === 'collector' ? 'collector' : p.npc ? 'npc' : 'bro', x: +p.x.toFixed(2), y: +p.y.toFixed(2), n: p.name,
         l: p.light ? 1 : undefined, st: t < p.stunUntil ? 1 : undefined, rv: p.npc && p.rv > 0 ? +p.rv.toFixed(2) : undefined,
         c: p.hue, z: z > 0 ? +z.toFixed(2) : undefined, lit: p.light && !p.npc,
       });
     }
     for (const ai of this.ais) {
-      all.push({ id: ai.id, k: 'sixseven', x: +ai.x.toFixed(2), y: +ai.y.toFixed(2), n: ai.name, ai: 1, st: t < ai.stunUntil ? 1 : undefined, lit: false });
+      all.push({ id: ai.id, k: 'collector', x: +ai.x.toFixed(2), y: +ai.y.toFixed(2), n: ai.name, ai: 1, st: t < ai.stunUntil ? 1 : undefined, lit: false });
     }
     const litBros = all.filter((e) => e.lit);
     const alive = this.bros.filter((b) => !b.npc).length;
-    const counts = { bros: this.bros.length, alive, sixsevens: this.ais.length + this.sixPlayers.length };
-    const ev = { power: this.ev.power, powerFix: +(this.ev.powerWork / EVENTS.generatorWork).toFixed(2), fog, rage: t < this.ev.rageEnd };
+    const counts = { bros: this.bros.length, alive, collectors: this.ais.length + this.collectorPlayers.length };
+    const ev = {
+      power: this.ev.power, powerFix: +(this.ev.powerWork / EVENTS.generatorWork).toFixed(2), fog,
+      rage: this.ev.mode === 'rage', lowgrav: this.ev.mode === 'lowgrav', disco: this.ev.mode === 'disco',
+      mode: this.ev.mode, modeEnd: Math.round(this.ev.modeEnd * 1000),
+    };
     const lobby = this.lobbyInfo();
 
     for (const p of this.players.values()) {
       if (!p.ws || p.ws.readyState !== 1) continue;
-      const monster = p.role === 'sixseven';
+      const monster = p.role === 'collector';
       let vision = p.light ? VISION.lit : VISION.dark;
       if (fog) vision *= 0.6;
       if (!this.ev.power) vision *= 0.85;
@@ -929,10 +958,10 @@ export class Room {
         if (d > INTEREST_RADIUS) continue;
         if (e.id !== p.id) {
           if (monster) {
-            // Sixsevens are blind: they sense bros up close or see their ring lights
+            // Bill Collectors are blind: they sense bros up close or see their ring lights
             if (e.k === 'npc') continue;
             if (e.k === 'bro' && d > VISION.monster && !e.lit) continue;
-          } else if (e.k === 'sixseven') {
+          } else if (e.k === 'collector') {
             const seen = d <= vision || litBros.some((b) => dist(b.x, b.y, e.x, e.y) < 5);
             if (!seen) continue;
           }
@@ -942,7 +971,7 @@ export class Room {
       }
       const noises: NoiseView[] = this.noises
         .filter((n) => dist(n.x, n.y, p.x, p.y) < INTEREST_RADIUS)
-        .map((n) => ({ id: n.id, x: +n.x.toFixed(1), y: +n.y.toFixed(1), r: n.r }));
+        .map((n) => ({ id: n.id, x: +n.x.toFixed(1), y: +n.y.toFixed(1), r: n.r, k: n.k }));
       const drops: DropView[] | undefined = sendDrops && !monster
         ? this.drops.filter((d) => dist(d.x, d.y, p.x, p.y) < INTEREST_RADIUS)
         : sendDrops ? [] : undefined;

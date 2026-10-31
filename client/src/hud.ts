@@ -28,30 +28,61 @@ export class Hud {
 
   show(on: boolean) { $('hud').classList.toggle('hidden', !on); }
 
-  timer(phase: Phase, phaseEnd: number, night: number, counts: { bros: number; alive: number; sixsevens: number }) {
+  timer(phase: Phase, phaseEnd: number, night: number, counts: { bros: number; alive: number; collectors: number }) {
     const p = $('phase');
     p.textContent = phase === 'lockin' ? `LOCK IN · NIGHT ${night}` : PHASE_NAMES[phase];
     p.classList.toggle('lockin', phase === 'lockin');
     const left = phaseEnd ? Math.max(0, Math.ceil((phaseEnd - Date.now()) / 1000)) : 0;
     $('timer').textContent = phase === 'lobby' ? 'WAITING' : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-    $('counts').textContent = `Bros ${counts.alive}/${counts.bros} alive · Sixsevens ${counts.sixsevens}`;
+    $('counts').textContent = `Bros ${counts.alive}/${counts.bros} alive · Bill Collectors ${counts.collectors}`;
   }
+
+  private lastMode: string | null = null;
 
   events(ev: WorldEvents) {
     const b = $('event-banner');
-    let text = '';
-    if (!ev.power) text = `POWER FAILURE · fix the generator in the plaza: ${Math.round(ev.powerFix * 100)}%`;
-    else if (ev.rage) text = 'SIXSEVEN RAGE · they are faster';
-    else if (ev.fog) text = 'OHIO FOG · you can barely see';
+    const left = ev.modeEnd ? Math.max(0, Math.ceil((ev.modeEnd - Date.now()) / 1000)) : 0;
+    const names: Record<string, string> = {
+      blackout: `POWER CUT · ${left}s · fix the generator in the plaza (${Math.round(ev.powerFix * 100)}%)`,
+      fog: `OHIO FOG · ${left}s`,
+      rage: `BILL COLLECTOR RAGE · ${left}s`,
+      lowgrav: `LOW GRAVITY · ${left}s · jump!`,
+      disco: `DISCO MODE · ${left}s · they hear less`,
+    };
+    const text = ev.mode ? names[ev.mode] : '';
     b.textContent = text;
     b.classList.toggle('hidden', !text);
+    if (ev.mode !== this.lastMode) {
+      // a quick flash so the switch between modes reads as a transition
+      const f = $('mode-flash');
+      f.classList.add('on');
+      setTimeout(() => f.classList.remove('on'), 500);
+      this.lastMode = ev.mode;
+    }
   }
+
+  auraPop(d: number, why: string) {
+    const box = $('aura-pops');
+    const pop = el('div', `aura-pop ${d >= 0 ? 'up' : 'down'}`, `${d >= 0 ? '+' : ''}${d} AURA`);
+    pop.appendChild(el('small', '', why));
+    box.appendChild(pop);
+    setTimeout(() => pop.remove(), 1900);
+    while (box.children.length > 3) box.firstElementChild!.remove();
+  }
+
+  walkMode(on: boolean) {
+    const s = $('walk-state');
+    s.textContent = on ? 'ON' : 'OFF';
+    s.classList.toggle('on', on);
+  }
+
+  toggleControls() { $('controls').classList.toggle('hidden'); }
 
   role(role: Role, npc: boolean) {
     const b = $('role-badge');
-    b.textContent = role === 'sixseven' ? 'YOU ARE A SIXSEVEN · hunt by sound' : npc ? 'NPC MODE · find a bro to revive you' : 'BRO';
-    b.style.color = role === 'sixseven' ? 'var(--pink)' : npc ? 'var(--muted)' : '#7cc7ff';
-    $('aura').classList.toggle('hidden', role === 'sixseven');
+    b.textContent = role === 'collector' ? 'YOU ARE A BILL COLLECTOR · hunt by sound' : npc ? 'NPC MODE · find a bro to revive you' : 'BRO';
+    b.style.color = role === 'collector' ? 'var(--pink)' : npc ? 'var(--muted)' : '#7cc7ff';
+    $('aura').classList.toggle('hidden', role === 'collector');
   }
 
   aura(v: number, on: boolean) {
@@ -68,7 +99,7 @@ export class Hud {
       const row = el('div', 'feed-item');
       const add = (cls: string, text: string) => row.appendChild(el('span', cls, text));
       switch (it.k) {
-        case 'caught': add('six', it.a!); add('ico', '67\'d'); add('bro', it.b!); break;
+        case 'caught': add('six', it.a!); add('ico', 'COLLECTED'); add('bro', it.b!); break;
         case 'mog': add('bro', it.a!); add('ico', 'MOGGED'); add('six', it.b!); break;
         case 'revive': add('bro', it.a!); add('ico', 'REVIVED'); add('bro', it.b!); break;
         case 'letin': add('bro', it.a!); add('ico', 'LET IN'); add('bro', it.b!); break;
@@ -90,7 +121,7 @@ export class Hud {
     const log = $('chat-log');
     const line = el('div', `chat-line${sys ? ' sys' : ''}`);
     if (!sys) {
-      line.appendChild(el('span', `who${role === 'sixseven' ? ' six' : ''}`, `${from}: `));
+      line.appendChild(el('span', `who${role === 'collector' ? ' six' : ''}`, `${from}: `));
       line.appendChild(document.createTextNode(text));
     } else {
       line.textContent = text;
@@ -158,9 +189,9 @@ export class Hud {
     const ping = (r: ScoreRow) => (r.ai ? 'AI' : r.ping < 0 ? 'away' : `${r.ping}ms`);
     fill('score-bros', rows.filter((r) => r.role === 'bro'), [
       ['Name', (r) => `${r.n}${r.alive ? '' : ' (NPC)'}`], ['Score', (r) => r.score], ['Mogs', (r) => r.mogs],
-      ['Revives', (r) => r.revives], ['Let in', (r) => r.letIns], ["67'd", (r) => r.caught], ['Ping', ping],
+      ['Revives', (r) => r.revives], ['Let in', (r) => r.letIns], ["collected", (r) => r.caught], ['Ping', ping],
     ]);
-    fill('score-six', rows.filter((r) => r.role === 'sixseven'), [
+    fill('score-six', rows.filter((r) => r.role === 'collector'), [
       ['Name', (r) => r.n], ['Score', (r) => r.score], ['Catches', (r) => r.catches], ['Ping', ping],
     ]);
   }
@@ -202,7 +233,7 @@ export class Hud {
       : `Waiting for ${info.hostName ?? 'the host'} to start the night.`;
     $('btn-start').classList.toggle('hidden', info.host !== myId);
     $('btn-role-bro').classList.toggle('ghost', role !== 'bro');
-    $('btn-role-six').classList.toggle('ghost', role !== 'sixseven');
+    $('btn-role-six').classList.toggle('ghost', role !== 'collector');
   }
 
   result(win: boolean, mvp?: string) {
@@ -210,7 +241,7 @@ export class Hud {
     r.classList.remove('hidden', 'win', 'lose');
     r.classList.add(win ? 'win' : 'lose');
     $('result-title').textContent = win ? 'W. TOUCHED GRASS.' : 'L + RATIO';
-    $('result-sub').textContent = `${win ? 'The bros survived the night.' : 'The Sixsevens got everyone.'}${mvp ? ` MVP: ${mvp}` : ''}`;
+    $('result-sub').textContent = `${win ? 'The bros survived the night.' : 'The Bill Collectors got everyone.'}${mvp ? ` MVP: ${mvp}` : ''}`;
     setTimeout(() => r.classList.add('hidden'), 9000);
   }
 }

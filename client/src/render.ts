@@ -74,7 +74,7 @@ interface BroMesh {
   name: string;
 }
 
-interface SixMesh {
+interface CollectorMesh {
   group: THREE.Group;
   armL: THREE.Group;
   armR: THREE.Group;
@@ -102,7 +102,7 @@ export class Renderer {
   private doors = new Map<string, THREE.Mesh>();
   private cribLabels = new Map<number, { sprite: THREE.Sprite; text: string }>();
   private bros = new Map<string, BroMesh>();
-  private sixes = new Map<string, SixMesh>();
+  private collectors = new Map<string, CollectorMesh>();
   private drops = new Map<number, THREE.Mesh>();
   private ripples: Array<{ mesh: THREE.Mesh; born: number; r: number }> = [];
   private seenNoise = new Set<number>();
@@ -111,6 +111,9 @@ export class Renderer {
   private target = new THREE.Vector3();
   private clock = new THREE.Clock();
   private power = true;
+  private zoom = 1;
+  private disco: THREE.PointLight[] = [];
+  private pets = new Map<number, { g: THREE.Group; kind: string }>();
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -122,12 +125,12 @@ export class Renderer {
     container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 200);
-    this.scene.background = new THREE.Color(0x05060b);
-    this.scene.fog = new THREE.Fog(0x05060b, 16, 34);
+    this.scene.background = new THREE.Color(0x0a0c16);
+    this.scene.fog = new THREE.Fog(0x0a0c16, 24, 46);
 
-    this.hemi = new THREE.HemisphereLight(0x6f7fc0, 0x0b0b12, 0.55);
+    this.hemi = new THREE.HemisphereLight(0x9fb0e8, 0x2a2a3a, 1.25);
     this.scene.add(this.hemi);
-    this.moon = new THREE.DirectionalLight(0x8fa2ff, 0.45);
+    this.moon = new THREE.DirectionalLight(0xc8d2ff, 1.1);
     this.moon.position.set(-8, 20, -6);
     this.moon.castShadow = true;
     this.moon.shadow.mapSize.set(1024, 1024);
@@ -142,6 +145,11 @@ export class Renderer {
       this.ringLights.push(l);
       this.scene.add(l);
     }
+    for (const c of [0xff3b6b, 0x3bd1ff, 0xffd23f]) {
+      const l = new THREE.PointLight(c, 0, 16, 1.2);
+      this.disco.push(l);
+      this.scene.add(l);
+    }
     for (let i = 0; i < LAMP_POOL; i++) {
       const l = new THREE.PointLight(0xffb36b, 0, 9, 1.5);
       this.lampLights.push(l);
@@ -149,7 +157,7 @@ export class Renderer {
     }
 
     this.floorMatOn = new THREE.MeshStandardMaterial({ map: noiseTexture('#6b4a33', '#2b1c12', 300, true), emissive: 0x3a2412, emissiveIntensity: 0.6 });
-    this.floorMatOff = new THREE.MeshStandardMaterial({ map: noiseTexture('#3a2a20', '#1b120c', 300, true) });
+    this.floorMatOff = new THREE.MeshStandardMaterial({ map: noiseTexture('#5a4232', '#2b1c12', 300, true) });
     this.floorMatMine = new THREE.MeshStandardMaterial({ map: noiseTexture('#5e4f80', '#2b2240', 300, true), emissive: 0x2b1d55, emissiveIntensity: 0.7 });
 
     this.scene.add(this.worldGroup);
@@ -175,7 +183,7 @@ export class Renderer {
     const span = hi - lo + 1;
 
     // ground
-    const groundTex = noiseTexture('#20232c', '#0c0d12', 900);
+    const groundTex = noiseTexture('#3a3f4c', '#1c1f27', 900);
     groundTex.repeat.set(span / 4, span / 4);
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(span, span),
@@ -205,7 +213,7 @@ export class Renderer {
       }
     }
 
-    const wallMat = new THREE.MeshStandardMaterial({ map: noiseTexture('#4a4f63', '#22252f', 500), roughness: 0.9 });
+    const wallMat = new THREE.MeshStandardMaterial({ map: noiseTexture('#7a8098', '#3c4050', 500), roughness: 0.9 });
     const inst = (geo: THREE.BufferGeometry, mat: THREE.Material, cells: Array<[number, number]>, y: number) => {
       const m = new THREE.InstancedMesh(geo, mat, Math.max(1, cells.length));
       m.count = cells.length;
@@ -258,6 +266,26 @@ export class Renderer {
       this.cribFloors.set(i, f);
       this.worldGroup.add(f);
     }
+    // scenery: a cat or dog in every crib, plus strays on the streets
+    for (const p of this.pets.values()) p.g.removeFromParent();
+    this.pets.clear();
+    let n = 0;
+    for (let i = 1; i < plots; i++) {
+      const [cx, cy] = plotCenter(i);
+      const kind = i % 2 ? 'cat' : 'dog';
+      const g = this.makePet(kind);
+      g.position.set(cx + 2, 0, cy - 2);
+      g.userData = { home: g.position.clone(), stray: false, phase: i };
+      this.worldGroup.add(g);
+      this.pets.set(n++, { g, kind });
+      if (i % 3 === 0) {
+        const s2 = this.makePet(i % 2 ? 'dog' : 'cat');
+        s2.position.set(cx + 7, 0, cy + 7);
+        s2.userData = { home: s2.position.clone(), stray: true, phase: i * 1.7 };
+        this.worldGroup.add(s2);
+        this.pets.set(n++, { g: s2, kind: 'stray' });
+      }
+    }
     // labels and doors are re-made from crib state
     for (const d of this.doors.values()) d.removeFromParent();
     this.doors.clear();
@@ -296,7 +324,7 @@ export class Renderer {
         cur?.sprite.removeFromParent();
         const s = textSprite(text, c.i === myCrib ? '#ffd23f' : '#d8d4ff', 36, 'rgba(0,0,0,0.35)');
         const [cx, cy] = plotCenter(c.i);
-        s.position.set(cx, 1.9, cy - 3.2);
+        s.position.set(cx, 1.6, cy + 4.9);
         this.scene.add(s);
         this.cribLabels.set(c.i, { sprite: s, text });
       }
@@ -306,6 +334,35 @@ export class Renderer {
     for (const [k, m] of this.doors) if (!seen.has(k)) { m.removeFromParent(); this.doors.delete(k); }
     for (const [i, l] of this.cribLabels) if (!seenLabels.has(i)) { l.sprite.removeFromParent(); this.cribLabels.delete(i); }
     for (const [i, f] of this.cribFloors) if (!seenLabels.has(i)) f.material = this.floorMatOff;
+  }
+
+  private makePet(kind: string): THREE.Group {
+    const g = new THREE.Group();
+    const fur = new THREE.MeshStandardMaterial({ color: kind === 'dog' ? 0xc08040 : 0xff9a3c });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.14, 0.3, 3, 8), fur);
+    body.rotation.z = Math.PI / 2;
+    body.position.y = 0.2;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), fur);
+    head.position.set(0.28, 0.32, 0);
+    g.add(body, head);
+    if (kind === 'dog') {
+      const ear = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.1), fur);
+      ear.position.set(0.26, 0.4, 0.1);
+      const ear2 = ear.clone();
+      ear2.position.z = -0.1;
+      g.add(ear, ear2);
+    } else {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.1, 4), fur);
+      ear.position.set(0.28, 0.46, 0.06);
+      const ear2 = ear.clone();
+      ear2.position.z = -0.06;
+      g.add(ear, ear2);
+    }
+    const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.3, 6), fur);
+    tail.position.set(-0.32, 0.32, 0);
+    tail.rotation.z = 0.6;
+    g.add(tail);
+    return g;
   }
 
   private makeBro(e: EntView): BroMesh {
@@ -344,38 +401,55 @@ export class Renderer {
     return { group, body, ring, label, reviveRing, kind: e.k, name: e.n };
   }
 
-  private makeSix(e: EntView): SixMesh {
+  private makeCollector(e: EntView): CollectorMesh {
+    // the Bill Collector: too tall, too thin, black suit, fedora, briefcase, and your overdue bill
     const group = new THREE.Group();
-    const skin = new THREE.MeshStandardMaterial({ color: 0xbfc3c9, roughness: 0.7, emissive: 0x220008, emissiveIntensity: 0.4 });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.32, 2.0, 10), skin);
+    const suit = new THREE.MeshStandardMaterial({ color: 0x17181f, roughness: 0.6, emissive: 0x200008, emissiveIntensity: 0.4 });
+    const skin = new THREE.MeshStandardMaterial({ color: 0xc9ccd2, roughness: 0.7 });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 2.0, 10), suit);
     body.position.y = 1.0;
     body.castShadow = true;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 12), skin);
-    head.scale.set(1, 1.35, 1);
+    const shirt = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.6, 0.02), new THREE.MeshStandardMaterial({ color: 0xf2f2f2 }));
+    shirt.position.set(0, 1.6, 0.25);
+    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 0.025), new THREE.MeshStandardMaterial({ color: 0xd11a3c, emissive: 0x550010 }));
+    tie.position.set(0, 1.58, 0.265);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.25, 14, 12), skin);
+    head.scale.set(1, 1.3, 1);
     head.position.y = 2.25;
     head.castShadow = true;
-    // a wide, eyeless grin
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.05, 0.02), new THREE.MeshBasicMaterial({ color: 0xff2050 }));
-    mouth.position.set(0, 2.18, 0.26);
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff2050 });
+    for (const dx of [-0.08, 0.08]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 6), eyeMat);
+      eye.position.set(dx, 2.3, 0.22);
+      group.add(eye);
+    }
+    const hatMat = new THREE.MeshStandardMaterial({ color: 0x0c0c10 });
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.04, 20), hatMat);
+    brim.position.y = 2.52;
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.27, 0.3, 16), hatMat);
+    crown.position.y = 2.68;
     const arm = (side: number) => {
       const pivot = new THREE.Group();
-      pivot.position.set(side * 0.3, 1.75, 0);
-      const a = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), skin);
-      a.position.set(side * 0.05, 0.1, 0.35);
-      a.rotation.x = -1.2; // forearms forward, palms up: the six-seven hand scale
-      const palm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.04, 0.2), skin);
-      palm.position.set(side * 0.05, 0.45, 0.72);
-      pivot.add(a, palm);
+      pivot.position.set(side * 0.32, 1.8, 0);
+      const a = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.0, 0.1), suit);
+      a.position.set(0, -0.5, 0);
+      pivot.add(a);
       group.add(pivot);
       return pivot;
     };
     const armL = arm(-1);
     const armR = arm(1);
-    const chest = textSprite('67', '#ff3b6b', 64, '');
-    chest.position.set(0, 1.35, 0.4);
-    const label = textSprite(e.ai ? 'SIXSEVEN' : `SIXSEVEN: ${e.n}`, '#ff3b6b', 30);
-    label.position.y = 2.95;
-    group.add(body, head, mouth, chest, label);
+    const briefcase = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.38, 0.5), new THREE.MeshStandardMaterial({ color: 0x5a3a1e }));
+    briefcase.position.set(0, -1.1, 0);
+    armL.add(briefcase);
+    const bill = textSprite('BILL: $6,700', '#111111', 28, 'rgba(255,255,255,0.95)');
+    bill.position.set(0, -1.05, 0.25);
+    armR.add(bill);
+    const chest = textSprite('$', '#ffd23f', 64, '');
+    chest.position.set(0, 1.15, 0.4);
+    const label = textSprite(e.ai ? 'BILL COLLECTOR' : `BILL COLLECTOR: ${e.n}`, '#ff3b6b', 30);
+    label.position.y = 3.15;
+    group.add(body, shirt, tie, head, brim, crown, chest, label);
     this.scene.add(group);
     return { group, armL, armR, chest, body };
   }
@@ -390,7 +464,7 @@ export class Renderer {
     return m;
   }
 
-  /** Floating "6" / "7" pop-ups near a Sixseven. */
+  /** Floating "6" / "7" pop-ups near a Bill Collector. */
   popText(x: number, y: number, text: string, color = '#ff3b6b') {
     const s = textSprite(text, color, 56, '');
     s.position.set(x + (Math.random() - 0.5), 2.8, y);
@@ -410,8 +484,8 @@ export class Renderer {
     for (const [id, m] of this.drops) if (!seen.has(id)) { m.removeFromParent(); this.drops.delete(id); }
   }
 
-  addNoise(id: number, x: number, y: number, r: number) {
-    if (this.seenNoise.has(id)) return;
+  addNoise(id: number, x: number, y: number, r: number): boolean {
+    if (this.seenNoise.has(id)) return false;
     this.seenNoise.add(id);
     if (this.seenNoise.size > 500) this.seenNoise = new Set([...this.seenNoise].slice(-200));
     const mesh = new THREE.Mesh(
@@ -422,7 +496,10 @@ export class Renderer {
     mesh.position.set(x, 0.06, y);
     this.scene.add(mesh);
     this.ripples.push({ mesh, born: performance.now(), r });
+    return true;
   }
+
+  zoomBy(d: number) { this.zoom = Math.max(0.55, Math.min(1.7, this.zoom + d)); }
 
   /** Draw a frame. `ents` are already interpolated. */
   frame(ents: EntView[], selfId: string, focus: { x: number; y: number }, ev: WorldEvents, monsterView: boolean) {
@@ -432,20 +509,28 @@ export class Renderer {
 
     // camera
     this.target.lerp(new THREE.Vector3(focus.x, 0, focus.y), 1 - Math.pow(0.0005, dt));
-    this.camera.position.copy(this.target).add(CAM_OFFSET);
+    this.camera.position.copy(this.target).addScaledVector(CAM_OFFSET, this.zoom);
     this.camera.lookAt(this.target.x, 0.6, this.target.z);
     this.moon.position.set(this.target.x - 8, 20, this.target.z - 6);
     this.moon.target.position.copy(this.target);
 
     // atmosphere
     const fog = this.scene.fog as THREE.Fog;
-    const near = ev.fog ? 5 : monsterView ? 10 : 16;
-    const far = ev.fog ? 14 : monsterView ? 24 : 34;
+    const near = ev.fog ? 6 : !ev.power ? 12 : monsterView ? 14 : 24;
+    const far = ev.fog ? 16 : !ev.power ? 26 : monsterView ? 30 : 46;
     fog.near += (near - fog.near) * 0.05;
     fog.far += (far - fog.far) * 0.05;
-    const hemiTarget = ev.power ? 0.55 : 0.22;
-    this.hemi.intensity += (hemiTarget - this.hemi.intensity) * 0.08;
-    this.moon.intensity = ev.power ? 0.45 : 0.25;
+    // smooth transitions between modes
+    const hemiTarget = !ev.power ? 0.35 : ev.disco ? 0.6 : 1.25;
+    this.hemi.intensity += (hemiTarget - this.hemi.intensity) * 0.06;
+    const moonTarget = ev.power ? 1.1 : 0.35;
+    this.moon.intensity += (moonTarget - this.moon.intensity) * 0.06;
+    this.hemi.color.lerp(new THREE.Color(ev.rage ? 0xff8090 : 0x9fb0e8), 0.05);
+    this.disco.forEach((l, i) => {
+      l.intensity = ev.disco ? 30 : 0;
+      const a = t / 500 + (i * Math.PI * 2) / 3;
+      l.position.set(focus.x + Math.cos(a) * 5, 3, focus.y + Math.sin(a) * 5);
+    });
     for (const h of this.lampHeads) (h.material as THREE.MeshStandardMaterial).emissiveIntensity = ev.power ? 2 : 0.05;
     if (this.generator) {
       const gm = this.generator.material as THREE.MeshStandardMaterial;
@@ -470,21 +555,21 @@ export class Renderer {
 
     // entities
     const seenBros = new Set<string>();
-    const seenSix = new Set<string>();
+    const seenCollectors = new Set<string>();
     const lit: Array<{ x: number; y: number; z: number }> = [];
     for (const e of ents) {
-      if (e.k === 'sixseven') {
-        seenSix.add(e.id);
-        let m = this.sixes.get(e.id);
-        if (!m) { m = this.makeSix(e); this.sixes.set(e.id, m); }
+      if (e.k === 'collector') {
+        seenCollectors.add(e.id);
+        let m = this.collectors.get(e.id);
+        if (!m) { m = this.makeCollector(e); this.collectors.set(e.id, m); }
         const prev = m.group.position.clone();
         m.group.position.set(e.x, 0, e.y);
         const mv = new THREE.Vector3(e.x - prev.x, 0, e.y - prev.z);
         if (mv.lengthSq() > 1e-5) m.group.rotation.y = Math.atan2(mv.x, mv.z);
-        // the six-seven hand motion: palms bob up and down out of phase
-        const speed = e.st ? 30 : 9;
-        m.armL.rotation.x = Math.sin(t / 1000 * speed) * 0.45;
-        m.armR.rotation.x = -Math.sin(t / 1000 * speed) * 0.45;
+        // stiff arm swing; frantic when mogged
+        const speed = e.st ? 30 : 7;
+        m.armL.rotation.x = Math.sin(t / 1000 * speed) * 0.35;
+        m.armR.rotation.x = -0.9 + Math.sin(t / 1000 * speed) * 0.15; // holding the bill out at you
         m.group.rotation.z = e.st ? Math.sin(t / 40) * 0.15 : 0;
         (m.body.material as THREE.MeshStandardMaterial).emissiveIntensity = e.st ? 2 : 0.4;
         continue;
@@ -518,7 +603,7 @@ export class Renderer {
       if (e.id === selfId) m.label.visible = false;
     }
     for (const [id, m] of this.bros) if (!seenBros.has(id)) { m.group.removeFromParent(); this.bros.delete(id); }
-    for (const [id, m] of this.sixes) if (!seenSix.has(id)) { m.group.removeFromParent(); this.sixes.delete(id); }
+    for (const [id, m] of this.collectors) if (!seenCollectors.has(id)) { m.group.removeFromParent(); this.collectors.delete(id); }
 
     // ring light pool: nearest lit bros get a real light
     lit.sort((a, b) => Math.hypot(a.x - focus.x, a.y - focus.y) - Math.hypot(b.x - focus.x, b.y - focus.y));
@@ -529,6 +614,19 @@ export class Renderer {
     });
     this.selfLight.position.set(focus.x, 1.6, focus.y);
     this.selfLight.intensity = monsterView ? 2 : 5;
+
+    // ambient cats and dogs: crib pets lounge, strays wander the streets (scenery only)
+    for (const p of this.pets.values()) {
+      const u = p.g.userData as { home: THREE.Vector3; stray: boolean; phase: number };
+      if (u.stray) {
+        const a = t / 6000 + u.phase;
+        const nx = u.home.x + Math.cos(a) * 2, nz = u.home.z + Math.sin(a * 1.3) * 2;
+        p.g.rotation.y = Math.atan2(nx - p.g.position.x, nz - p.g.position.z) - Math.PI / 2;
+        p.g.position.set(nx, Math.abs(Math.sin(t / 120)) * 0.04, nz);
+      } else {
+        p.g.rotation.y = u.phase + Math.sin(t / 3000 + u.phase) * 0.5;
+      }
+    }
 
     // drops spin
     for (const d of this.drops.values()) { d.rotation.y += dt * 2; d.position.y = 0.45 + Math.sin(t / 400 + d.id) * 0.08; }

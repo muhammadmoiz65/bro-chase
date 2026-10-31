@@ -40,9 +40,9 @@ class Game {
   phaseEnd = 0;
   night = 0;
   R = 1;
-  ev: WorldEvents = { power: true, powerFix: 0, fog: false, rage: false };
+  ev: WorldEvents = { power: true, powerFix: 0, fog: false, rage: false, lowgrav: false, disco: false, mode: null, modeEnd: 0 };
   lobby: LobbyInfo | null = null;
-  counts = { bros: 0, alive: 0, sixsevens: 0 };
+  counts = { bros: 0, alive: 0, collectors: 0 };
   cribs = new Map<number, CribView>();
   snaps: Snap[] = [];
   me = { x: 0, y: 0, jumpT: 0, jumpCd: 0, init: false };
@@ -115,7 +115,11 @@ class Game {
       case 'scores': hud.scores(m.rows, this.selfId, this.lobby?.name ?? ''); break;
       case 'result':
         hud.result(m.win, m.mvp);
-        if ((m.win && this.role === 'bro') || (!m.win && this.role === 'sixseven')) sfx.win(); else sfx.lose();
+        if ((m.win && this.role === 'bro') || (!m.win && this.role === 'collector')) sfx.win(); else sfx.lose();
+        break;
+      case 'aura':
+        hud.auraPop(m.d, m.why);
+        if (m.d >= 0) sfx.auraUp(); else sfx.auraDown();
         break;
       case 'ping': this.send({ t: 'pong', at: m.at }); break;
       case 'kicked': this.closed = true; showMenu(m.reason); break;
@@ -142,7 +146,15 @@ class Game {
       renderer.updateCribs(m.cribs, this.myCrib);
     }
     if (m.drops) renderer.setDrops(m.drops);
-    for (const n of m.noises) renderer.addNoise(n.id, n.x, n.y, n.r);
+    for (const n of m.noises) {
+      if (!renderer.addNoise(n.id, n.x, n.y, n.r)) continue;
+      // hear what's near you: footsteps, pets, smashing
+      const d = dist(n.x, n.y, this.me.x, this.me.y);
+      if (d > 14) continue;
+      const vol = Math.max(0.15, 1 - d / 14);
+      if (n.k === 'step' || n.k === 'zoom' || n.k === 'land') sfx.step(vol * (n.k === 'zoom' ? 1.6 : 1));
+      else if (n.k === 'smash') sfx.knock();
+    }
 
     const self = ents.get(this.selfId);
     if (self) {
@@ -183,12 +195,16 @@ class Game {
     switch (a) {
       case 'jump':
         if (this.role === 'bro' && !this.npc && this.me.jumpT <= 0 && this.me.jumpCd <= 0) {
-          this.me.jumpT = JUMP.sec;
+          this.me.jumpT = this.ev.lowgrav ? JUMP.lowGravSec : JUMP.sec;
           sfx.jump();
         }
         this.send({ t: 'jump' });
         break;
       case 'light': this.send({ t: 'light' }); sfx.light(); break;
+      case 'walkToggle': hud.walkMode(input.sneakLatch); break;
+      case 'camIn': renderer.zoomBy(-0.12); break;
+      case 'camOut': renderer.zoomBy(0.12); break;
+      case 'controls': hud.toggleControls(); break;
       case 'use': this.send({ t: 'use' }); break;
       case 'repairOn': this.send({ t: 'repair', on: true }); break;
       case 'repairOff': this.send({ t: 'repair', on: false }); break;
@@ -251,9 +267,9 @@ class Game {
       }
     }
     let sp: number;
-    if (this.role === 'sixseven') {
+    if (this.role === 'collector') {
       sp = this.phase === 'lockin' ? SPEED.monsterPlayer * (this.ev.rage ? EVENTS.rageSpeed : 1) * (this.ev.power ? 1 : 1.1) : SPEED.walk;
-    } else sp = this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : SPEED.walk;
+    } else sp = this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : mv.sneak ? SPEED.sneak : SPEED.walk;
     if (mv.dx || mv.dy) {
       [me.x, me.y] = move(me.x, me.y, mv.dx * sp * dt, mv.dy * sp * dt, this.R, this.doors, { ghost: this.npc, airborne: me.jumpT > 0 });
     }
@@ -272,9 +288,9 @@ class Game {
       }
     }
     const sideName = (s: DoorSide) => (s === 0 ? 'front' : 'back');
-    if (this.role === 'sixseven') {
+    if (this.role === 'collector') {
       if (best && doorBlocks(this.doors(best.plot, best.side))) return 'E: smash the door';
-      return this.phase === 'lockin' ? 'Listen for noise ripples. Touch a bro to 67 them.' : 'The night starts soon. Get ready.';
+      return this.phase === 'lockin' ? 'Listen for noise ripples. Touch a bro to collect them.' : 'The night starts soon. Get ready.';
     }
     if (!this.ev.power && dist(x, y, GENERATOR_POS[0], GENERATOR_POS[1]) < EVENTS.generatorRange) return `Hold R: fix the generator (${Math.round(this.ev.powerFix * 100)}%)`;
     if (best) {
@@ -286,11 +302,9 @@ class Game {
       }
       if (doorBlocks(d)) return `E: knock on ${c.ownerName}'s ${sideName(best.side)} door`;
     }
-    for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      if (cellAt(Math.floor(x + ox * 0.9), Math.floor(y + oy * 0.9), this.R).kind === 'fence') return 'Space: jump the fence (Sixsevens have to go around)';
-    }
     if (this.phase === 'pregame') return 'Grab purple aura drops, then get to your crib';
-    if (cribAtPos(x, y, this.R) === this.myCrib) return 'F: ring light  ·  Shift is loud  ·  doors stay locked unless you open them';
+    if (input.sneakLatch) return 'Walk mode: slow and quiet';
+    if (cribAtPos(x, y, this.R) === this.myCrib) return 'Doors stay locked unless you open them. C = walk mode (quiet)';
     return '';
   }
 
@@ -304,14 +318,15 @@ class Game {
     if (self && this.me.init) {
       self.x = this.me.x;
       self.y = this.me.y;
-      if (this.role === 'bro' && !this.npc) self.z = this.me.jumpT > 0 ? Math.sin(Math.PI * (1 - this.me.jumpT / JUMP.sec)) * JUMP.height : 0;
+      const js = this.ev.lowgrav ? JUMP.lowGravSec : JUMP.sec, jh = this.ev.lowgrav ? JUMP.lowGravHeight : JUMP.height;
+      if (this.role === 'bro' && !this.npc) self.z = this.me.jumpT > 0 ? Math.max(0, Math.sin(Math.PI * (1 - this.me.jumpT / js))) * jh : 0;
     }
-    // the Sixseven chant when one is close
+    // the Bill Collector chant when one is close
     if (this.role === 'bro') {
       let nearest = Infinity;
       let near: EntView | null = null;
       for (const e of ents) {
-        if (e.k !== 'sixseven') continue;
+        if (e.k !== 'collector') continue;
         const d = dist(e.x, e.y, this.me.x, this.me.y);
         if (d < nearest) { nearest = d; near = e; }
       }
@@ -319,11 +334,11 @@ class Game {
         chant(nearest);
         if (nearest < 9 && now - this.lastPop > 700) {
           this.lastPop = now;
-          renderer.popText(near.x, near.y, Math.floor(now / 700) % 2 ? '7' : '6');
+          renderer.popText(near.x, near.y, ['PAY UP', '$$$', 'YOU OWE ME', 'OVERDUE'][Math.floor(now / 700) % 4], '#ffd23f');
         }
       }
     }
-    renderer.frame(ents, this.selfId, this.me, this.ev, this.role === 'sixseven');
+    renderer.frame(ents, this.selfId, this.me, this.ev, this.role === 'collector');
     hud.timer(this.phase, this.phaseEnd, this.night, this.counts);
     hud.hint(this.hintText());
     hud.tickKnock();
@@ -364,7 +379,7 @@ function startGame(opts: JoinOpts) {
   game = new Game(opts);
 }
 
-const role = (): Role => ($<HTMLSelectElement>('role-select').value === 'sixseven' ? 'sixseven' : 'bro');
+const role = (): Role => ($<HTMLSelectElement>('role-select').value === 'collector' ? 'collector' : 'bro');
 
 async function refreshLobbies() {
   const ul = $('lobby-list');
@@ -540,7 +555,7 @@ $('btn-logout').onclick = async () => {
 $('btn-leave').onclick = () => { game?.leave(); showMenu(); };
 $('btn-start').onclick = () => game?.send({ t: 'start' });
 $('btn-role-bro').onclick = () => game?.send({ t: 'role', role: 'bro' });
-$('btn-role-six').onclick = () => game?.send({ t: 'role', role: 'sixseven' });
+$('btn-role-six').onclick = () => game?.send({ t: 'role', role: 'collector' });
 $('btn-copy').onclick = async () => {
   const code = game?.lobby?.code;
   if (!code) return;

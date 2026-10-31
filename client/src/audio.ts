@@ -1,4 +1,4 @@
-// Tiny synthesized sound effects (no audio files needed) plus the Sixseven's chant.
+// Tiny synthesized sound effects (no audio files needed) plus the Bill Collector's chant.
 
 let ctx: AudioContext | null = null;
 const ac = () => (ctx ??= new AudioContext());
@@ -28,6 +28,11 @@ export const sfx = {
   jump() { tone(300, 0.12, 'sine', 0.06, 200); },
   light() { tone(1200, 0.06, 'triangle', 0.05); },
   event() { tone(220, 0.4, 'sawtooth', 0.12); setTimeout(() => tone(180, 0.5, 'sawtooth', 0.12), 300); },
+  step(vol: number) { tone(90 + Math.random() * 30, 0.05, 'triangle', 0.08 * vol); },
+  bark() { tone(420, 0.09, 'sawtooth', 0.12, -200); setTimeout(() => tone(400, 0.1, 'sawtooth', 0.12, -200), 180); },
+  meow() { tone(700, 0.35, 'triangle', 0.1, 300); },
+  auraUp() { tone(880, 0.12, 'triangle', 0.08, 300); },
+  auraDown() { tone(300, 0.2, 'square', 0.06, -150); },
   win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.25, 'triangle', 0.15), i * 140)); },
   lose() { [392, 330, 262, 196].forEach((f, i) => setTimeout(() => tone(f, 0.35, 'sawtooth', 0.1), i * 180)); },
 };
@@ -36,14 +41,14 @@ let voiceOn = true;
 let lastChant = 0;
 export function setVoice(on: boolean) { voiceOn = on; }
 
-/** The Sixseven chants "six seven" when it's close. Uses the browser's speech voice if there is one. */
+/** The Bill Collector mutters "pay up" when it's close. Uses the browser's speech voice if there is one. */
 export function chant(distance: number) {
   const now = performance.now();
   if (!voiceOn || distance > 7 || now - lastChant < 3500) return;
   lastChant = now;
   try {
     if ('speechSynthesis' in window) {
-      const u = new SpeechSynthesisUtterance('six... seven');
+      const u = new SpeechSynthesisUtterance(['pay up', 'you owe me', 'your bill is overdue'][Math.floor(Math.random() * 3)]);
       u.rate = 0.7;
       u.pitch = 0.2;
       u.volume = Math.max(0.15, 1 - distance / 7);

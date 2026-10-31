@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>Bro Chase</title>
-  <meta name="description" content="Survive the night. Don't get 67'd. A brain-rot co-op survival horror game in your browser." />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2311121a'/><text x='32' y='44' font-size='30' font-family='Arial Black,Arial' font-weight='900' text-anchor='middle' fill='%23ff3b6b'>67</text></svg>" />
+  <meta name="description" content="Survive the night. Don't get collected. A brain-rot co-op survival horror game in your browser." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2311121a'/><text x='32' y='44' font-size='30' font-family='Arial Black,Arial' font-weight='900' text-anchor='middle' fill='%23ff3b6b'>$</text></svg>" />
 </head>
 <body>
   <div id="game"></div>
@@ -14,7 +14,7 @@
   <div id="menu" class="screen">
     <div class="menu-card">
       <h1 class="logo">BRO <span>CHASE</span></h1>
-      <p class="tag">survive the night. don't get <b>67</b>'d.</p>
+      <p class="tag">survive the night. don't let the <b>Bill Collector</b> get you.</p>
 
       <div id="captcha-box" class="panel hidden">
         <h3>Quick check</h3>
@@ -32,7 +32,7 @@
           <label>Play as
             <select id="role-select">
               <option value="bro">Bro</option>
-              <option value="sixseven">Sixseven (needs 4 bros each)</option>
+              <option value="collector">Bill Collector (needs 4 bros each)</option>
             </select>
           </label>
         </div>
@@ -85,15 +85,15 @@
         </div>
 
         <div id="tab-help" class="tab-body hidden help">
-          <p>Each bro has a <b>crib</b> with a front and back door. Doors are <b>locked</b> by default. Sixsevens are blind and hunt by <b>sound</b>, so every step, smash and knock gives you away.</p>
+          <p>Each bro has a <b>crib</b> with a front and back door. Doors are <b>locked</b> by default. Bill Collectors are blind and hunt by <b>sound</b>: footsteps, sprinting, smashing and knocking all give you away. Walk mode is slow but nearly silent.</p>
           <ul>
-            <li><kbd>WASD</kbd> move, <kbd>Shift</kbd> zoom (loud), <kbd>Space</kbd> jump fences</li>
-            <li><kbd>F</kbd> ring light: mogs a Sixseven that gets close, burns aura</li>
+            <li><kbd>WASD</kbd> move, <kbd>C</kbd> walk mode (quiet), <kbd>Shift</kbd> sprint (loud), <kbd>Space</kbd> jump</li>
+            <li><kbd>F</kbd> ring light: mogs a Bill Collector that gets close, burns aura</li>
             <li><kbd>E</kbd> open your door, or knock on a friend's (they choose to let you in)</li>
             <li><kbd>R</kbd> hold to repair your doors, or fix the generator in a power failure</li>
             <li><kbd>Y</kbd>/<kbd>N</kbd> answer a knock, <kbd>Tab</kbd> scoreboard, <kbd>Enter</kbd> chat</li>
           </ul>
-          <p>Got 67'd? You're in <b>NPC mode</b>. A living bro standing next to you for 3 seconds brings you back. Survive until the timer runs out to touch grass.</p>
+          <p>Got collected? You're in <b>NPC mode</b>. A living bro standing next to you for 3 seconds brings you back. Survive until the timer runs out to touch grass.</p>
         </div>
       </div>
       <p id="menu-error" class="error"></p>
@@ -118,6 +118,21 @@
       <div id="aura"><div id="aura-fill"></div><span id="aura-text">AURA 60</span></div>
     </div>
     <div id="hint"></div>
+    <div id="aura-pops"></div>
+    <div id="controls">
+      <div class="controls-head"><b>Controls</b><span class="muted small">H to hide</span></div>
+      <div><kbd>WASD</kbd> move</div>
+      <div><kbd>C</kbd> walk mode (quiet) <span id="walk-state" class="pill">OFF</span></div>
+      <div><kbd>Shift</kbd> sprint (loud)</div>
+      <div><kbd>Space</kbd> jump</div>
+      <div><kbd>F</kbd> ring light</div>
+      <div><kbd>E</kbd> open door / knock</div>
+      <div><kbd>R</kbd> hold: repair / generator</div>
+      <div><kbd>Y</kbd> <kbd>N</kbd> answer a knock</div>
+      <div><kbd>+</kbd> <kbd>-</kbd> camera zoom</div>
+      <div><kbd>Tab</kbd> scores · <kbd>Enter</kbd> chat</div>
+    </div>
+    <div id="mode-flash"></div>
     <div id="knock" class="hidden">
       <p id="knock-text"></p>
       <div id="knock-bar"><div></div></div>
@@ -132,7 +147,7 @@
       <p class="muted small" id="lobby-host"></p>
       <div class="row">
         <button id="btn-role-bro" class="small">Play as bro</button>
-        <button id="btn-role-six" class="small">Play as Sixseven</button>
+        <button id="btn-role-six" class="small">Play as Bill Collector</button>
       </div>
       <button id="btn-start" class="big hidden">START THE NIGHT</button>
     </div>
@@ -141,7 +156,7 @@
       <h2 id="score-title">Scoreboard</h2>
       <div class="teams">
         <div><h3>Bros</h3><table id="score-bros"></table></div>
-        <div><h3>Sixsevens</h3><table id="score-six"></table></div>
+        <div><h3>Bill Collectors</h3><table id="score-six"></table></div>
       </div>
     </div>
     <button id="btn-leave" class="ghost small">Leave</button>
@@ -152,7 +167,8 @@
         <button data-act="light">LIGHT</button>
         <button data-act="use">USE</button>
         <button data-act="repair">FIX</button>
-        <button data-act="zoom">ZOOM</button>
+        <button data-act="zoom">SPRINT</button>
+        <button data-act="walk">WALK</button>
         <button data-act="score">TAB</button>
         <button data-act="chat">CHAT</button>
       </div>

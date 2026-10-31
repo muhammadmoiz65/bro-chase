@@ -2,9 +2,9 @@
 
 import type { CribView, DoorSide } from './world.ts';
 
-export type Role = 'bro' | 'sixseven';
+export type Role = 'bro' | 'collector';
 export type Phase = 'lobby' | 'pregame' | 'lockin' | 'touchgrass';
-export type EntKind = 'bro' | 'npc' | 'sixseven';
+export type EntKind = 'bro' | 'npc' | 'collector';
 
 export interface EntView {
   id: string;
@@ -13,7 +13,7 @@ export interface EntView {
   y: number;
   n: string; // display name
   l?: 1; // ring light on
-  ai?: 1; // AI-controlled Sixseven
+  ai?: 1; // AI-controlled Bill Collector
   st?: 1; // stunned (mogged)
   rv?: number; // revive progress 0..1 for NPCs
   c?: number; // colour hue 0..359
@@ -24,7 +24,7 @@ export interface SelfView {
   id: string;
   role: Role;
   aura: number;
-  crib: number; // plot index of own crib, -1 for Sixsevens
+  crib: number; // plot index of own crib, -1 for Bill Collectors
 }
 
 export interface LobbyInfo {
@@ -36,12 +36,19 @@ export interface LobbyInfo {
   hostName?: string;
 }
 
+export type ModeName = 'blackout' | 'fog' | 'rage' | 'lowgrav' | 'disco';
+
 export interface WorldEvents {
   power: boolean; // street lamps + crib lights on
-  powerFix: number; // generator repair progress 0..1 during an outage
+  powerFix: number; // generator repair progress 0..1 during a power cut
   fog: boolean;
   rage: boolean;
+  lowgrav: boolean;
+  disco: boolean;
+  mode: ModeName | null; // the short random mode running now
+  modeEnd: number; // ms epoch
 }
+
 
 export interface LobbyListing {
   code: string;
@@ -51,7 +58,8 @@ export interface LobbyListing {
   quick: boolean;
 }
 
-export interface NoiseView { id: number; x: number; y: number; r: number }
+export type NoiseKind = 'step' | 'zoom' | 'land' | 'repair' | 'knock' | 'door' | 'smash' | 'mog';
+export interface NoiseView { id: number; x: number; y: number; r: number; k: NoiseKind }
 export interface DropView { id: number; x: number; y: number }
 
 export interface ScoreRow {
@@ -60,11 +68,11 @@ export interface ScoreRow {
   role: Role;
   alive: boolean;
   score: number;
-  catches: number; // Sixseven: bros caught
-  mogs: number; // bro: Sixsevens stunned with the ring light
+  catches: number; // Bill Collector: bros caught
+  mogs: number; // bro: Bill Collectors stunned with the ring light
   revives: number;
   letIns: number;
-  caught: number; // times this bro got 67'd
+  caught: number; // times this bro got collected
   ping: number;
   ai?: boolean;
 }
@@ -86,7 +94,7 @@ export type ServerMsg =
       cribs?: CribView[]; // sent every few ticks
       noises: NoiseView[];
       drops?: DropView[];
-      counts: { bros: number; alive: number; sixsevens: number };
+      counts: { bros: number; alive: number; collectors: number };
       lobby: LobbyInfo;
       ev: WorldEvents;
     }
@@ -96,11 +104,12 @@ export type ServerMsg =
   | { t: 'chat'; from: string; role: Role; text: string; sys?: boolean }
   | { t: 'scores'; rows: ScoreRow[] }
   | { t: 'result'; win: boolean; night: number; mvp?: string }
+  | { t: 'aura'; d: number; why: string }
   | { t: 'ping'; at: number }
   | { t: 'kicked'; reason: string };
 
 export type ClientMsg =
-  | { t: 'input'; dx: number; dy: number; zoom: boolean }
+  | { t: 'input'; dx: number; dy: number; zoom: boolean; sneak?: boolean }
   | { t: 'jump' }
   | { t: 'light' } // toggle ring light
   | { t: 'use' } // open own door / knock / smash

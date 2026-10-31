@@ -121,13 +121,7 @@ export function cellAt(x: number, y: number, R: number): CellInfo {
   }
   const inX = lx >= -CRIB_HALF && lx <= CRIB_HALF - 1;
   const inY = ly >= -CRIB_HALF && ly <= CRIB_HALF - 1;
-  if (!inX || !inY) {
-    // a low yard fence ring with four gaps (front, back, both sides)
-    const seg = (v: number) => (v >= -5 && v <= -2) || (v >= 1 && v <= 4);
-    if ((ly === 5 || ly === -6) && seg(lx)) return { kind: 'fence', plot };
-    if ((lx === 5 || lx === -6) && seg(ly)) return { kind: 'fence', plot };
-    return { kind: 'street', plot };
-  }
+  if (!inX || !inY) return { kind: 'street', plot };
   const edgeX = lx === -CRIB_HALF || lx === CRIB_HALF - 1;
   const edgeY = ly === -CRIB_HALF || ly === CRIB_HALF - 1;
   if (!edgeX && !edgeY) return { kind: 'floor', plot };

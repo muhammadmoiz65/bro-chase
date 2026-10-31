@@ -4,7 +4,7 @@ import { WebSocket } from 'ws';
 import { Room } from '../server/game.ts';
 import { startServer } from '../server/index.ts';
 import { solvePow } from '../server/captcha.ts';
-import { doorCenter, cellAt, move } from '../shared/world.ts';
+import { doorCenter } from '../shared/world.ts';
 import type { ServerMsg } from '../shared/protocol.ts';
 
 // ---------- room-level tests with fake sockets ----------
@@ -29,7 +29,7 @@ const tick = (r: Room, n = 1) => { for (let i = 0; i < n; i++) (r as any).tick()
 /** Host starts and we skip straight past pregame into the night. */
 const lockIn = (r: Room, hostId: string) => { r.handle(hostId, { t: 'start' }); r.phaseEnd = 0; tick(r); };
 
-function joinN(r: Room, n: number, role: 'bro' | 'sixseven' = 'bro') {
+function joinN(r: Room, n: number, role: 'bro' | 'collector' = 'bro') {
   const out: Array<{ id: string; ws: FakeWs }> = [];
   for (let i = 0; i < n; i++) {
     const ws = new FakeWs();
@@ -50,7 +50,7 @@ test('first player in a custom lobby is the host, and only the host can start', 
   assert.equal(r.phase, 'pregame');
 });
 
-test('one Sixseven per 4 bros (rounded up), AI fills the slots', () => {
+test('one Bill Collector per 4 bros (rounded up), AI fills the slots', () => {
   const r = makeRoom();
   joinN(r, 9);
   lockIn(r, 'p1');
@@ -58,16 +58,16 @@ test('one Sixseven per 4 bros (rounded up), AI fills the slots', () => {
   assert.equal(r.ais.length, 3); // ceil(9 / 4)
 });
 
-test('a player can only be a Sixseven while the 4:1 ratio holds', () => {
+test('a player can only be a Bill Collector while the 4:1 ratio holds', () => {
   const r = makeRoom();
-  const [solo] = joinN(r, 1, 'sixseven');
+  const [solo] = joinN(r, 1, 'collector');
   assert.equal(r.players.get(solo.id)!.role, 'bro');
   assert.match(solo.ws.last('welcome')!.notice!, /4 bros/);
   joinN(r, 3);
-  const [monster] = joinN(r, 1, 'sixseven');
-  assert.equal(r.players.get(monster.id)!.role, 'sixseven');
+  const [monster] = joinN(r, 1, 'collector');
+  assert.equal(r.players.get(monster.id)!.role, 'collector');
   lockIn(r, 'p1');
-  assert.equal(r.ais.length, 0); // 4 bros -> 1 Sixseven, already a player
+  assert.equal(r.ais.length, 0); // 4 bros -> 1 Bill Collector, already a player
 });
 
 test('every bro gets a crib, doors start locked, and the map grows with players', () => {
@@ -131,7 +131,7 @@ test('owners open their own door without asking', () => {
   assert.equal(r.cribs.get(pa.crib)!.doors[0].open, true);
 });
 
-test('a Sixseven catches a bro, a lit ring light mogs it, a revive brings the bro back', () => {
+test('a Bill Collector catches a bro, a lit ring light mogs it, a revive brings the bro back', () => {
   const r = makeRoom();
   const [a, b] = joinN(r, 2);
   lockIn(r, a.id);
@@ -151,31 +151,13 @@ test('a Sixseven catches a bro, a lit ring light mogs it, a revive brings the br
   assert.equal(pa.npc, false, 'revived');
   assert.equal(pb.stats.revives, 1);
 
-  // mog: B's ring light stuns a Sixseven that gets close
+  // mog: B's ring light stuns a Bill Collector that gets close
   ai.stunUntil = 0;
   pb.light = true;
   ai.x = pb.x + 1.5; ai.y = pb.y;
   (r as any).hunterChecks(ai, Date.now() / 1000);
   assert.ok(ai.stunUntil > Date.now() / 1000, 'stunned');
   assert.equal(pb.stats.mogs, 1);
-});
-
-test('bros can jump fences, Sixsevens cannot walk through them', () => {
-  // find a fence cell south of crib 1's yard
-  const R = 1;
-  const noDoors = () => undefined;
-  let fx = 0, fy = 0;
-  outer: for (let y = 0; y < 14; y++) for (let x = 0; x < 14; x++) {
-    if (cellAt(x + 14, y, R).kind === 'fence' && cellAt(x + 14, y - 1, R).kind === 'street' && cellAt(x + 14, y + 1, R).kind === 'street') {
-      fx = x + 14; fy = y; break outer;
-    }
-  }
-  assert.ok(fx, 'found a fence');
-  const start: [number, number] = [fx + 0.5, fy - 0.6];
-  const walked = move(start[0], start[1], 0, 2, R, noDoors);
-  assert.ok(walked[1] < fy, 'walking is blocked');
-  const jumped = move(start[0], start[1], 0, 2, R, noDoors, { airborne: true });
-  assert.ok(jumped[1] > fy + 1, 'jumping clears it');
 });
 
 test('a mid-air bro cannot be caught', () => {
@@ -196,11 +178,12 @@ test('power failure is fixed by repairing the generator', () => {
   const [a] = joinN(r, 1);
   lockIn(r, a.id);
   r.ev.power = false;
-  r.ev.outageEnd = Infinity;
+  r.ev.mode = 'blackout';
+  r.ev.modeEnd = Infinity;
   const pa = r.players.get(a.id)!;
   pa.x = 1.5; pa.y = 1.6; // next to the generator in the plaza
   r.handle(a.id, { t: 'repair', on: true });
-  tick(r, 6 * 20 + 2);
+  tick(r, 4 * 20 + 2);
   assert.equal(r.ev.power, true);
 });
 
@@ -213,7 +196,7 @@ test('chat is broadcast, trimmed and rate limited', () => {
   assert.match(a.ws.last('chat')!.text, /Slow down/);
 });
 
-test('scoreboard lists players and AI Sixsevens', () => {
+test('scoreboard lists players and AI Bill Collectors', () => {
   const r = makeRoom();
   const [a] = joinN(r, 3);
   lockIn(r, a.id);
