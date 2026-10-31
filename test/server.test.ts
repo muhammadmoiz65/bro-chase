@@ -68,14 +68,17 @@ test('one Opp per 4 bros (rounded up), AI fills the slots', () => {
   assert.equal(r.ais.length, 3); // ceil(9 / 4)
 });
 
-test('a player can only be an Opp while the 4:1 ratio holds', () => {
+test('anyone can play as an Opp: bot bros keep the 4:1 ratio, extra Opps wait for a slot', () => {
   const r = makeRoom();
   const [solo] = joinN(r, 1, 'opp');
-  assert.equal(r.players.get(solo.id)!.role, 'bro');
-  assert.match(solo.ws.last('welcome')!.notice!, /4 bros/);
+  assert.equal(r.players.get(solo.id)!.role, 'opp');
+  assert.equal(r.bots.length, 4); // one Opp needs 4 bros, so bots fill in
   joinN(r, 3);
-  const [monster] = joinN(r, 1, 'opp');
-  assert.equal(r.players.get(monster.id)!.role, 'opp');
+  assert.equal(r.bots.length, 1);
+  const [late] = joinN(r, 1, 'opp');
+  assert.equal(r.players.get(late.id)!.role, 'bro'); // 4 real bros -> 1 Opp slot, already taken
+  assert.match(late.ws.last('welcome')!.notice!, /slot/);
+  assert.equal(r.bots.length, 0);
   lockIn(r, 'p1');
   assert.equal(r.ais.length, 0); // 4 bros -> 1 Opp, already a player
 });

@@ -35,6 +35,12 @@ export const sfx = {
   auraUp() { tone(880, 0.12, 'triangle', 0.08, 300); },
   auraDown() { tone(300, 0.2, 'square', 0.06, -150); },
   win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.25, 'triangle', 0.15), i * 140)); },
+  /** The Opp's echo screech: a falling shriek. */
+  screech(vol = 1) { tone(1400, 0.5, 'sawtooth', 0.12 * vol, -1100); setTimeout(() => tone(900, 0.4, 'square', 0.06 * vol, -600), 90); },
+  ping() { tone(1800, 0.08, 'sine', 0.06); },
+  lunge() { tone(160, 0.25, 'sawtooth', 0.12, 260); },
+  /** A heartbeat thump; louder when a bro is close. */
+  beat(vol: number) { tone(58, 0.11, 'sine', 0.35 * vol); setTimeout(() => tone(50, 0.13, 'sine', 0.28 * vol), 150); },
   lose() { [392, 330, 262, 196].forEach((f, i) => setTimeout(() => tone(f, 0.35, 'sawtooth', 0.1), i * 180)); },
 };
 

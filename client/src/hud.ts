@@ -2,7 +2,7 @@
 // Everything user-written is set with textContent, never innerHTML.
 
 import type { FeedItem, LobbyInfo, Phase, Role, ScoreRow, SelfView, WorldEvents } from '../../shared/protocol.ts';
-import { DEF, DEF_KINDS, DEFENCE, GEAR, SHOP, type DefKind, type ShopId } from '../../shared/constants.ts';
+import { DEF, DEF_KINDS, DEFENCE, GEAR, MONSTER, SHOP, type DefKind, type ShopId } from '../../shared/constants.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -178,12 +178,13 @@ export class Hud {
     }
   }
 
-  toggleControls() { $('controls').classList.toggle('hidden'); }
+  toggleControls() { $(this.wasOpp ? 'controls-opp' : 'controls').classList.toggle('hidden'); }
 
   private introTimer = 0;
   /** Intro card for the first seconds of a session: what the game is and the controls. */
-  intro(sec = 12) {
+  intro(sec = 12, opp = false) {
     const box = $('intro');
+    box.classList.toggle('opp', opp);
     const bar = $('intro-bar').firstElementChild as HTMLElement;
     box.classList.remove('hidden', 'fade');
     bar.style.transition = 'none';
@@ -205,12 +206,66 @@ export class Hud {
     clearTimeout(this.introTimer);
     box.classList.add('fade');
     setTimeout(() => box.classList.add('hidden'), 500);
-    $('controls').classList.remove('hidden'); // keep a small controls card after the intro
+    $(this.wasOpp ? 'controls-opp' : 'controls').classList.remove('hidden'); // keep a small controls card after the intro
+  }
+
+  private wasOpp = false;
+
+  /** Opp abilities, the heartbeat glow, the queue note, and the role-specific controls card. */
+  hunter(you: SelfView, phase: Phase) {
+    const opp = you.role === 'opp';
+    $('hud').classList.toggle('opp', opp);
+    $('hunter').classList.toggle('hidden', !opp);
+    const q = $('queued');
+    q.classList.toggle('hidden', !you.wantOpp);
+    q.textContent = you.wantOpp ? 'Queued for an Opp slot' : '';
+    if (opp !== this.wasOpp) {
+      this.wasOpp = opp;
+      const showing = !$('controls').classList.contains('hidden') || !$('controls-opp').classList.contains('hidden');
+      $('controls').classList.toggle('hidden', opp || !showing);
+      $('controls-opp').classList.toggle('hidden', !opp || !showing);
+    }
+    if (!opp) { $('heartbeat').style.opacity = '0'; return; }
+    const night = phase === 'lockin';
+    const ab = (id: string, left: number, total: number) => {
+      const box = $(id);
+      const ready = night && left <= 0;
+      box.classList.toggle('cd', !ready);
+      box.querySelector('b')!.textContent = !night ? 'at night' : ready ? 'READY' : `${Math.ceil(left)}s`;
+      (box.querySelector('i') as HTMLElement).style.width = `${ready || !night ? 0 : (left / total) * 100}%`;
+    };
+    ab('ab-screech', you.scr ?? 0, MONSTER.screechCd);
+    ab('ab-lunge', you.lun ?? 0, MONSTER.lungeCd);
+    $('heartbeat').style.opacity = String(Math.min(0.9, (you.sense ?? 0) * 1.1));
+  }
+
+  /** One thump of the heartbeat glow. */
+  beat() {
+    const h = $('heartbeat');
+    h.classList.remove('beat');
+    void h.offsetWidth;
+    h.classList.add('beat');
+  }
+
+  /** Arrows at the screen edge pointing to sounds off-screen. */
+  compass(marks: Array<{ x: number; y: number; a: number; o: number; loud: boolean }>) {
+    const box = $('sound-compass');
+    while (box.children.length < marks.length) box.appendChild(el('div', 'snd'));
+    [...box.children].forEach((c, i) => {
+      const m = marks[i];
+      const e = c as HTMLElement;
+      if (!m) { e.style.opacity = '0'; return; }
+      e.style.opacity = String(m.o);
+      e.style.left = `${m.x - 9}px`;
+      e.style.top = `${m.y - 12}px`;
+      e.style.transform = `rotate(${m.a + Math.PI / 2}rad)`;
+      e.classList.toggle('loud', m.loud);
+    });
   }
 
   role(role: Role, npc: boolean) {
     const b = $('role-badge');
-    b.textContent = role === 'opp' ? 'YOU ARE A OPP · hunt by sound' : npc ? 'NPC MODE · find a bro to revive you' : 'BRO';
+    b.textContent = role === 'opp' ? 'OPP · blind, hunt by sound' : npc ? 'NPC MODE · find a bro to revive you' : 'BRO';
     b.style.color = role === 'opp' ? 'var(--pink)' : npc ? 'var(--muted)' : '#7cc7ff';
     $('aura').classList.toggle('hidden', role === 'opp');
   }
