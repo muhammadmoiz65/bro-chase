@@ -16,6 +16,11 @@
 ### Platform and look
 - 2026-10-31: **Web based and online.**
 - 2026-10-31: **2.5D with Three.js** (3D world, angled camera, 2D grid logic). Replaced an earlier pick of 2D top-down Phaser.
+  **Replaced** by Babylon.js (next entry).
+- 2026-10-31: **Switch the client engine to Babylon.js.** Moiz said "I think we need to change our game engine", saw the side-by-side
+  test (`proto/engines/`, [ENGINE-TEST.md](ENGINE-TEST.md)) and chose Babylon.js on the decision card, over the recommendation to stay
+  on Three.js. Still 2.5D, still a browser game, server and `shared/` unchanged. The move happens in 3 PRs: (1) engine core + world,
+  (2) characters, gear looks, creator, (3) effects, post-processing, then remove Three.js. Don't add new Three.js code.
 - 2026-10-31: **Brain-rot theme** (memes like 67, aura, mog, rizz, Ohio).
 - 2026-10-31: **Bright game.** Only power cuts are dark. Moiz asked twice that it not be dark.
 - 2026-10-31: Power cuts are **random and last 10 to 20 seconds**, with smooth transitions. Other short random modes too (fog, rage, low gravity, disco, aura rain).
@@ -72,9 +77,6 @@
 
 ## Open questions (Moiz hasn't decided)
 
-- 2026-10-31: Low FPS reported. Moiz asked whether to switch to a separate engine. **Recommendation: stay on Three.js.**
-  The slowdown was settings (20 always-on lights, Retina-res post-processing, soft shadows), fixed in PR #7.
-  Unity/Godot web exports load slowly and would mean rewriting the client; Babylon/PlayCanvas would be a rewrite for no real gain.
 - Free with cosmetics, or paid? (The old plan recommended free with cosmetics only.)
 - Hosting for a public server (not set up yet; the game runs locally).
 
@@ -108,6 +110,13 @@
 - v0.1 base game · v0.2 Bill Collector, walk mode, brighter, random modes · v0.3 daylight, intro, cash + shop ·
   v0.4 Opps, crib claiming, unique cribs, defences, shop fix.
 - PR #1 gear + upgrade looks · PR #2 character creator · PR #3 play as Opp · PR #4 graphics + kill callouts · PR #5 vents. All merged.
+
+### Free 3D models
+- From the cloud, kenney.nl, poly.pizza and quaternius.com are blocked, but `raw.githubusercontent.com` works.
+  CC0 models that load from there: Kenney starter kits (`KenneyNL/Starter-Kit-City-Builder/main/models/*.glb`,
+  `KenneyNL/Starter-Kit-3D-Platformer/main/models/*.glb`, each with `models/Textures/colormap.png`) and the three.js examples
+  (`mrdoob/three.js/r170/examples/models/gltf/RobotExpressive/RobotExpressive.glb`, HDR skies in `examples/textures/equirectangular/`).
+- Engine test runs with `npm run proto` on port 5174 (needs the game server on 3000).
 
 ### Known issues
 - `README.md` is out of date: it still mentions fences, the generator and "Opp rage / Ohio fog" naming. Update it when touching docs.
