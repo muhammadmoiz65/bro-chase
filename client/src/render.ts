@@ -6,6 +6,7 @@ import { DOOR_LEVEL_HP, PLOT, RING_LIGHT_RANGE } from '../../shared/constants.ts
 import { applyGear, makeDefence, makeDoor, tickUpgrades } from './upgrades.ts';
 import { cellAt, doorCenter, plotCenter, ventsFor, type CribView } from '../../shared/world.ts';
 import type { DefView, DropView, EntView, PropView, WorldEvents } from '../../shared/protocol.ts';
+import { FX } from './fx/index.ts';
 import { DEFAULT_LOOK, parseLook } from '../../shared/look.ts';
 import { buildAvatar, type Avatar } from './avatar.ts';
 
@@ -109,6 +110,9 @@ export class Renderer {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
+  fx: FX;
+  private stunnedIds = new Set<string>();
+  private airborne = new Map<string, number>();
   private hemi: THREE.HemisphereLight;
   private moon: THREE.DirectionalLight;
   private selfLight: THREE.PointLight;
@@ -150,7 +154,7 @@ export class Renderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.35;
+    this.renderer.toneMappingExposure = 1.2;
     container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 200);
@@ -162,7 +166,10 @@ export class Renderer {
     this.moon = new THREE.DirectionalLight(0xfff2dd, 2.2);
     this.moon.position.set(-8, 20, -6);
     this.moon.castShadow = true;
-    this.moon.shadow.mapSize.set(1024, 1024);
+    this.moon.shadow.mapSize.set(2048, 2048);
+    this.moon.shadow.bias = -0.0004;
+    this.moon.shadow.normalBias = 0.02;
+    this.moon.shadow.radius = 3;
     const sc = this.moon.shadow.camera;
     sc.left = sc.bottom = -22; sc.right = sc.top = 22; sc.near = 1; sc.far = 60;
     this.scene.add(this.moon, this.moon.target);
@@ -191,13 +198,14 @@ export class Renderer {
     this.floorMatMine = new THREE.MeshStandardMaterial({ map: noiseTexture('#8f7cc4', '#5e4f80', 300, true) });
 
     this.scene.add(this.worldGroup);
+    this.fx = new FX(this.renderer, this.scene, this.camera);
     window.addEventListener('resize', () => this.resize());
   }
 
   resize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.fx.resize();
   }
 
   /** Build the static neighbourhood for ring radius R. */
@@ -569,11 +577,17 @@ export class Renderer {
     for (const d of drops) {
       seen.add(d.id);
       let m = this.drops.get(d.id);
-      if (!m) { m = this.makeDrop(d.k); this.drops.set(d.id, m); }
+      if (!m) { m = this.makeDrop(d.k); m.userData.k = d.k; this.drops.set(d.id, m); }
       m.position.x = d.x;
       m.position.z = d.y;
     }
-    for (const [id, m] of this.drops) if (!seen.has(id)) { m.removeFromParent(); this.drops.delete(id); }
+    for (const [id, m] of this.drops) {
+      if (seen.has(id)) continue;
+      // picked up: a little sparkle where it was
+      this.fx.particles.burst(m.userData.k === 'cash' ? 'cash' : 'aura', m.position.x, m.position.y, m.position.z);
+      m.removeFromParent();
+      this.drops.delete(id);
+    }
   }
 
   setProps(props: PropView[]) {
@@ -647,6 +661,8 @@ export class Renderer {
     const now = performance.now();
     if (now - (this.lastShot.get(key) ?? 0) < 180) return;
     this.lastShot.set(key, now);
+    this.fx.particles.burst('shot', x, 0.7, y, { color });
+    this.fx.particles.burst('hit', tx, 1.2, ty, { scale: 0.4 });
     const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x, 0.7, y), new THREE.Vector3(tx, 1.2, ty)]);
     const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1 }));
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), new THREE.MeshBasicMaterial({ color }));
@@ -657,8 +673,8 @@ export class Renderer {
     this.shots.push({ m: g, born: now });
   }
 
-  /** `hunter`: the Opp's sound vision, where every ripple glows hot and thick. */
-  addNoise(id: number, x: number, y: number, r: number, hunter = false): boolean {
+  /** `hunter`: the Opp's sound vision, where every ripple glows hot and thick. `k` picks the particle puff. */
+  addNoise(id: number, x: number, y: number, r: number, hunter = false, k?: string): boolean {
     if (this.seenNoise.has(id)) return false;
     this.seenNoise.add(id);
     if (this.seenNoise.size > 500) this.seenNoise = new Set([...this.seenNoise].slice(-200));
@@ -672,6 +688,14 @@ export class Renderer {
     mesh.userData.o = hunter ? 0.9 : 0.6;
     this.scene.add(mesh);
     this.ripples.push({ mesh, born: performance.now(), r });
+    const P = this.fx.particles;
+    if (k === 'step' || k === 'zoom') P.burst('dust', x, 0.05, y, { scale: k === 'zoom' ? 1.3 : 0.8 });
+    else if (k === 'land') P.burst('land', x, 0.05, y);
+    else if (k === 'smash') { P.burst('splinter', x, 0.7, y); P.burst('smoke', x, 0.3, y); }
+    else if (k === 'knock' || k === 'door') P.burst('hit', x, 0.7, y, { scale: 0.5 });
+    else if (k === 'repair') P.burst('sparks', x, 0.6, y, { scale: 0.4 });
+    else if (k === 'mog') P.burst('mog', x, 1.2, y);
+    else if (k === 'bass') P.burst('hit', x, 0.4, y, { scale: 1.6 });
     return true;
   }
 
@@ -780,6 +804,7 @@ export class Renderer {
     const seenBros = new Set<string>();
     const seenOpps = new Set<string>();
     const lit: Array<{ x: number; y: number; z: number }> = [];
+    let danger = 0;
     for (const e of ents) {
       if (e.k === 'opp') {
         seenOpps.add(e.id);
@@ -795,6 +820,9 @@ export class Renderer {
         m.armR.rotation.x = -Math.sin(t / 1000 * speed) * 0.45; // arms swinging, reaching for you
         m.group.rotation.z = e.st ? Math.sin(t / 40) * 0.15 : 0;
         (m.body.material as THREE.MeshStandardMaterial).emissiveIntensity = e.st ? 2 : 0.4;
+        if (e.st && !this.stunnedIds.has(e.id)) { this.fx.particles.burst('mog', e.x, 1.6, e.y, { scale: 1.3 }); this.fx.shake(0.15); }
+        if (e.st) this.stunnedIds.add(e.id); else this.stunnedIds.delete(e.id);
+        danger = Math.max(danger, 1 - Math.hypot(e.x - focus.x, e.y - focus.y) / 9);
         continue;
       }
       seenBros.add(e.id);
@@ -827,10 +855,14 @@ export class Renderer {
         m.reviveRing.geometry.dispose();
         m.reviveRing.geometry = new THREE.RingGeometry(0.5, 0.62, 32, 1, 0, Math.PI * 2 * e.rv);
       }
+      // landing puff when a jump touches down
+      const z = e.z ?? 0, wasZ = this.airborne.get(e.id) ?? 0;
+      if (wasZ > 0.25 && z < 0.05) this.fx.particles.burst('land', e.x, 0.05, e.y, { scale: 0.7 });
+      this.airborne.set(e.id, z);
       if (e.l && !npc) lit.push({ x: e.x, y: e.y, z: e.z ?? 0 });
       if (e.id === selfId) m.label.visible = false;
     }
-    for (const [id, m] of this.bros) if (!seenBros.has(id)) { m.group.removeFromParent(); m.avatar.dispose(); this.bros.delete(id); }
+    for (const [id, m] of this.bros) if (!seenBros.has(id)) { m.group.removeFromParent(); m.avatar.dispose(); this.bros.delete(id); this.airborne.delete(id); }
     for (const [id, m] of this.opps) if (!seenOpps.has(id)) { m.group.removeFromParent(); this.opps.delete(id); }
 
     // ring light pool: nearest lit bros get a real light
@@ -909,6 +941,10 @@ export class Renderer {
       return true;
     });
 
-    this.renderer.render(this.scene, this.camera);
+    this.danger = Math.max(0, danger);
+    this.fx.render(dt, { power: ev.power, rage: ev.rage, fog: ev.fog, monsterView, danger: this.danger, focus });
   }
+
+  /** 0..1: how close the nearest Opp is to the camera target (for heartbeat and screen effects). */
+  danger = 0;
 }
