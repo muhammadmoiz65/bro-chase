@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Bro Chase</title>
+  <meta name="description" content="Survive the night. Don't get 67'd. A brain-rot co-op survival horror game in your browser." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2311121a'/><text x='32' y='44' font-size='30' font-family='Arial Black,Arial' font-weight='900' text-anchor='middle' fill='%23ff3b6b'>67</text></svg>" />
+</head>
+<body>
+  <div id="game"></div>
+
+  <!-- ===== Main menu ===== -->
+  <div id="menu" class="screen">
+    <div class="menu-card">
+      <h1 class="logo">BRO <span>CHASE</span></h1>
+      <p class="tag">survive the night. don't get <b>67</b>'d.</p>
+
+      <div id="captcha-box" class="panel hidden">
+        <h3>Quick check</h3>
+        <p class="muted">Guests just tick the box. No sign-up needed.</p>
+        <label id="pow-check" class="npc-check"><input type="checkbox" id="pow-input" /> <span>I'm not an NPC</span></label>
+        <div id="turnstile-slot"></div>
+        <p id="captcha-status" class="muted small"></p>
+      </div>
+
+      <div id="menu-main" class="hidden">
+        <div class="row">
+          <label class="grow">Name
+            <input id="name-input" maxlength="16" autocomplete="off" />
+          </label>
+          <label>Play as
+            <select id="role-select">
+              <option value="bro">Bro</option>
+              <option value="sixseven">Sixseven (needs 4 bros each)</option>
+            </select>
+          </label>
+        </div>
+
+        <button id="btn-quick" class="big">QUICK PLAY</button>
+
+        <div class="tabs">
+          <button class="tab active" data-tab="tab-lobbies">Lobbies</button>
+          <button class="tab" data-tab="tab-create">Create lobby</button>
+          <button class="tab" data-tab="tab-join">Join with code</button>
+          <button class="tab" data-tab="tab-account">Account</button>
+          <button class="tab" data-tab="tab-help">How to play</button>
+        </div>
+
+        <div id="tab-lobbies" class="tab-body">
+          <div class="row between"><span class="muted">Public lobbies</span><button id="btn-refresh" class="small">Refresh</button></div>
+          <ul id="lobby-list" class="lobby-list"></ul>
+        </div>
+
+        <div id="tab-create" class="tab-body hidden">
+          <label>Lobby name <input id="lobby-name" maxlength="16" placeholder="Ohio squad" /></label>
+          <label class="check"><input type="checkbox" id="lobby-private" checked /> Private (only people with the invite code can join)</label>
+          <button id="btn-create">Create lobby</button>
+        </div>
+
+        <div id="tab-join" class="tab-body hidden">
+          <label>Invite code <input id="join-code" maxlength="6" placeholder="ABC123" style="text-transform:uppercase" /></label>
+          <button id="btn-join">Join</button>
+        </div>
+
+        <div id="tab-account" class="tab-body hidden">
+          <p id="account-status"></p>
+          <form id="form-secure" class="stack">
+            <p class="muted small">Add a username and password so you can play on other devices. Until then your account lives on this device only.</p>
+            <input id="sec-user" placeholder="username" autocomplete="username" />
+            <input id="sec-pass" type="password" placeholder="new password (6+ characters)" autocomplete="new-password" />
+            <input id="sec-current" type="password" placeholder="current password" autocomplete="current-password" class="hidden" />
+            <button type="submit">Save login</button>
+          </form>
+          <details>
+            <summary>Already have an account? Sign in on this device</summary>
+            <form id="form-login" class="stack">
+              <input id="login-user" placeholder="username" autocomplete="username" />
+              <input id="login-pass" type="password" placeholder="password" autocomplete="current-password" />
+              <button type="submit">Sign in</button>
+            </form>
+          </details>
+          <button id="btn-logout" class="ghost small">Sign out of this device</button>
+          <p id="account-msg" class="muted small"></p>
+        </div>
+
+        <div id="tab-help" class="tab-body hidden help">
+          <p>Each bro has a <b>crib</b> with a front and back door. Doors are <b>locked</b> by default. Sixsevens are blind and hunt by <b>sound</b>, so every step, smash and knock gives you away.</p>
+          <ul>
+            <li><kbd>WASD</kbd> move, <kbd>Shift</kbd> zoom (loud), <kbd>Space</kbd> jump fences</li>
+            <li><kbd>F</kbd> ring light: mogs a Sixseven that gets close, burns aura</li>
+            <li><kbd>E</kbd> open your door, or knock on a friend's (they choose to let you in)</li>
+            <li><kbd>R</kbd> hold to repair your doors, or fix the generator in a power failure</li>
+            <li><kbd>Y</kbd>/<kbd>N</kbd> answer a knock, <kbd>Tab</kbd> scoreboard, <kbd>Enter</kbd> chat</li>
+          </ul>
+          <p>Got 67'd? You're in <b>NPC mode</b>. A living bro standing next to you for 3 seconds brings you back. Survive until the timer runs out to touch grass.</p>
+        </div>
+      </div>
+      <p id="menu-error" class="error"></p>
+    </div>
+  </div>
+
+  <!-- ===== HUD ===== -->
+  <div id="hud" class="hidden">
+    <div id="top-bar">
+      <div id="phase">PREGAME</div>
+      <div id="timer">0:45</div>
+      <div id="counts"></div>
+    </div>
+    <div id="event-banner" class="hidden"></div>
+    <div id="feed"></div>
+    <div id="chat">
+      <div id="chat-log"></div>
+      <input id="chat-input" class="hidden" maxlength="140" placeholder="say something (Enter to send, Esc to close)" />
+    </div>
+    <div id="bottom-left">
+      <div id="role-badge"></div>
+      <div id="aura"><div id="aura-fill"></div><span id="aura-text">AURA 60</span></div>
+    </div>
+    <div id="hint"></div>
+    <div id="knock" class="hidden">
+      <p id="knock-text"></p>
+      <div id="knock-bar"><div></div></div>
+      <div class="row">
+        <button id="knock-yes">Let in (Y)</button>
+        <button id="knock-no" class="ghost">Nah (N)</button>
+      </div>
+    </div>
+    <div id="lobby-panel" class="hidden">
+      <h3 id="lobby-title"></h3>
+      <div id="lobby-code-row" class="row"><span>Invite code</span><b id="lobby-code"></b><button id="btn-copy" class="small">Copy link</button></div>
+      <p class="muted small" id="lobby-host"></p>
+      <div class="row">
+        <button id="btn-role-bro" class="small">Play as bro</button>
+        <button id="btn-role-six" class="small">Play as Sixseven</button>
+      </div>
+      <button id="btn-start" class="big hidden">START THE NIGHT</button>
+    </div>
+    <div id="result" class="hidden"><h2 id="result-title"></h2><p id="result-sub"></p></div>
+    <div id="scoreboard" class="hidden">
+      <h2 id="score-title">Scoreboard</h2>
+      <div class="teams">
+        <div><h3>Bros</h3><table id="score-bros"></table></div>
+        <div><h3>Sixsevens</h3><table id="score-six"></table></div>
+      </div>
+    </div>
+    <button id="btn-leave" class="ghost small">Leave</button>
+    <div id="touch" class="hidden">
+      <div id="stick"><div id="stick-knob"></div></div>
+      <div id="touch-buttons">
+        <button data-act="jump">JUMP</button>
+        <button data-act="light">LIGHT</button>
+        <button data-act="use">USE</button>
+        <button data-act="repair">FIX</button>
+        <button data-act="zoom">ZOOM</button>
+        <button data-act="score">TAB</button>
+        <button data-act="chat">CHAT</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,554 @@
+import './style.css';
+import { api, getToken, loadTurnstile, setToken, solvePow, type Account } from './api.ts';
+import { Renderer } from './render.ts';
+import { Hud } from './hud.ts';
+import { Input, type Action } from './input.ts';
+import { chant, sfx } from './audio.ts';
+import { DOOR, EVENTS, JUMP, SPEED } from '../../shared/constants.ts';
+import {
+  cellAt, cribAtPos, dist, doorBlocks, doorCenter, GENERATOR_POS, move, overFence, type CribView, type DoorSide,
+} from '../../shared/world.ts';
+import type { ClientMsg, EntView, LobbyInfo, Phase, Role, ServerMsg, WorldEvents } from '../../shared/protocol.ts';
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const ls = {
+  get(k: string) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
+};
+
+let account: Account | null = null;
+let game: Game | null = null;
+const renderer = new Renderer($('game'));
+const hud = new Hud();
+const input = new Input();
+
+// ======================================================================
+// Game session
+// ======================================================================
+
+interface Snap { recv: number; ents: Map<string, EntView> }
+
+interface JoinOpts { mode: 'quick' | 'create' | 'join'; code?: string; name?: string; priv?: boolean; role: Role }
+
+class Game {
+  ws: WebSocket;
+  selfId = '';
+  role: Role = 'bro';
+  myCrib = -1;
+  aura = 0;
+  phase: Phase = 'pregame';
+  phaseEnd = 0;
+  night = 0;
+  R = 1;
+  ev: WorldEvents = { power: true, powerFix: 0, fog: false, rage: false };
+  lobby: LobbyInfo | null = null;
+  counts = { bros: 0, alive: 0, sixsevens: 0 };
+  cribs = new Map<number, CribView>();
+  snaps: Snap[] = [];
+  me = { x: 0, y: 0, jumpT: 0, jumpCd: 0, init: false };
+  npc = false;
+  stunned = false;
+  lightOn = false;
+  lastSent = '';
+  lastSentAt = 0;
+  scoresOpen = false;
+  scoreTimer = 0;
+  closed = false;
+  lastPop = 0;
+  raf = 0;
+
+  constructor(opts: JoinOpts) {
+    const q = new URLSearchParams({ token: getToken() ?? '', mode: opts.mode, role: opts.role });
+    if (opts.code) q.set('code', opts.code.toUpperCase());
+    if (opts.name) q.set('name', opts.name);
+    if (opts.priv) q.set('priv', '1');
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    this.ws = new WebSocket(`${proto}://${location.host}/ws?${q}`);
+    this.ws.onmessage = (e) => this.onMsg(JSON.parse(e.data));
+    this.ws.onclose = (e) => this.onClose(e);
+    this.loop = this.loop.bind(this);
+    this.raf = requestAnimationFrame(this.loop);
+  }
+
+  send(m: ClientMsg) { if (this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); }
+
+  leave() {
+    this.closed = true;
+    cancelAnimationFrame(this.raf);
+    this.ws.close();
+  }
+
+  private onClose(e: CloseEvent) {
+    cancelAnimationFrame(this.raf);
+    if (this.closed) return;
+    this.closed = true;
+    const reasons: Record<number, string> = { 4001: 'Your device sign-in expired. Reload the page.', 4004: 'No lobby with that code.' };
+    showMenu(reasons[e.code] ?? (e.reason || 'Disconnected from the server.'));
+  }
+
+  private onMsg(m: ServerMsg) {
+    switch (m.t) {
+      case 'welcome':
+        this.selfId = m.you.id;
+        this.role = m.you.role;
+        this.myCrib = m.you.crib;
+        hud.myName = account?.name ?? '';
+        if (m.notice) hud.chat('server', 'bro', m.notice, true);
+        hud.chat('server', 'bro', 'Press Enter to chat, Tab for scores.', true);
+        break;
+      case 'snap': this.onSnap(m); break;
+      case 'feed':
+        hud.feed(m.items);
+        for (const it of m.items) {
+          if (it.k === 'caught') { if (it.b === hud.myName) sfx.caught(); }
+          else if (it.k === 'mog') sfx.mog();
+          else if (it.k === 'revive') sfx.revive();
+          else if (it.k === 'event') sfx.event();
+        }
+        break;
+      case 'chat': hud.chat(m.from, m.role, m.text, m.sys); break;
+      case 'knock':
+        sfx.knock();
+        hud.knock(m.id, m.from, m.side, m.expires, (ok) => this.answer(ok));
+        break;
+      case 'knockDone': hud.clearKnock(m.id); break;
+      case 'scores': hud.scores(m.rows, this.selfId, this.lobby?.name ?? ''); break;
+      case 'result':
+        hud.result(m.win, m.mvp);
+        if ((m.win && this.role === 'bro') || (!m.win && this.role === 'sixseven')) sfx.win(); else sfx.lose();
+        break;
+      case 'ping': this.send({ t: 'pong', at: m.at }); break;
+      case 'kicked': this.closed = true; showMenu(m.reason); break;
+    }
+  }
+
+  private onSnap(m: Extract<ServerMsg, { t: 'snap' }>) {
+    const ents = new Map(m.ents.map((e) => [e.id, e]));
+    this.snaps.push({ recv: performance.now(), ents });
+    if (this.snaps.length > 30) this.snaps.shift();
+    const prevPhase = this.phase;
+    this.phase = m.phase;
+    this.phaseEnd = m.phaseEnd;
+    this.night = m.night;
+    this.ev = m.ev;
+    this.lobby = m.lobby;
+    this.counts = m.counts;
+    this.role = m.you.role;
+    this.myCrib = m.you.crib;
+    this.aura = m.you.aura;
+    if (m.R !== this.R || !this.me.init) { this.R = m.R; renderer.buildWorld(m.R); }
+    if (m.cribs) {
+      this.cribs = new Map(m.cribs.map((c) => [c.i, c]));
+      renderer.updateCribs(m.cribs, this.myCrib);
+    }
+    if (m.drops) renderer.setDrops(m.drops);
+    for (const n of m.noises) renderer.addNoise(n.id, n.x, n.y, n.r);
+
+    const self = ents.get(this.selfId);
+    if (self) {
+      const wasNpc = this.npc;
+      this.npc = self.k === 'npc';
+      this.stunned = !!self.st;
+      this.lightOn = !!self.l;
+      if (!this.me.init || dist(self.x, self.y, this.me.x, this.me.y) > 2.2 || prevPhase !== this.phase || wasNpc !== this.npc) {
+        this.me.x = self.x;
+        this.me.y = self.y;
+        this.me.init = true;
+      } else {
+        // gently pull the predicted position toward the server's
+        const k = this.lastSent.includes('"dx":0,"dy":0') ? 0.2 : 0.03;
+        this.me.x += (self.x - this.me.x) * k;
+        this.me.y += (self.y - this.me.y) * k;
+      }
+    }
+    hud.role(this.role, this.npc);
+    hud.aura(this.aura, this.lightOn);
+    hud.events(this.ev);
+    hud.lobby(this.lobby, this.phase, this.selfId, this.role);
+  }
+
+  private doors = (plot: number, side: DoorSide) => {
+    const c = this.cribs.get(plot);
+    return c && c.owner ? c.doors[side] : undefined;
+  };
+
+  answer(ok: boolean) {
+    const id = hud.pendingKnock;
+    if (id === null) return;
+    this.send({ t: 'answer', id, ok });
+    hud.clearKnock();
+  }
+
+  action(a: Action) {
+    switch (a) {
+      case 'jump':
+        if (this.role === 'bro' && !this.npc && this.me.jumpT <= 0 && this.me.jumpCd <= 0) {
+          this.me.jumpT = JUMP.sec;
+          sfx.jump();
+        }
+        this.send({ t: 'jump' });
+        break;
+      case 'light': this.send({ t: 'light' }); sfx.light(); break;
+      case 'use': this.send({ t: 'use' }); break;
+      case 'repairOn': this.send({ t: 'repair', on: true }); break;
+      case 'repairOff': this.send({ t: 'repair', on: false }); break;
+      case 'yes': this.answer(true); break;
+      case 'no': this.answer(false); break;
+      case 'scoreOn':
+        this.scoresOpen = true;
+        hud.scoreboard(true);
+        this.send({ t: 'scores' });
+        break;
+      case 'scoreOff': this.scoresOpen = false; hud.scoreboard(false); break;
+      case 'chat': {
+        const r = hud.toggleChat();
+        input.enabled = !r.open;
+        input.clear();
+        if (r.text) this.send({ t: 'chat', text: r.text });
+        break;
+      }
+    }
+  }
+
+  private interpolated(): EntView[] {
+    const n = this.snaps.length;
+    if (!n) return [];
+    const renderAt = performance.now() - 110;
+    let a = this.snaps[0], b = this.snaps[n - 1];
+    for (let i = n - 1; i > 0; i--) {
+      if (this.snaps[i - 1].recv <= renderAt) { a = this.snaps[i - 1]; b = this.snaps[i]; break; }
+    }
+    const span = b.recv - a.recv;
+    const f = span > 0 ? Math.max(0, Math.min(1, (renderAt - a.recv) / span)) : 1;
+    const out: EntView[] = [];
+    for (const [id, eb] of b.ents) {
+      const ea = a.ents.get(id);
+      if (ea && Math.hypot(ea.x - eb.x, ea.y - eb.y) < 3) {
+        out.push({ ...eb, x: ea.x + (eb.x - ea.x) * f, y: ea.y + (eb.y - ea.y) * f, z: (ea.z ?? 0) + ((eb.z ?? 0) - (ea.z ?? 0)) * f });
+      } else out.push(eb);
+    }
+    return out;
+  }
+
+  private predict(dt: number) {
+    const mv = input.move();
+    // send input on change, and at least 5 times a second
+    const key = JSON.stringify(mv);
+    const t = performance.now();
+    if (key !== this.lastSent || t - this.lastSentAt > 200) {
+      this.send({ t: 'input', ...mv });
+      this.lastSent = key;
+      this.lastSentAt = t;
+    }
+    if (!this.me.init || this.stunned) return;
+    const me = this.me;
+    me.jumpCd = Math.max(0, me.jumpCd - dt);
+    if (me.jumpT > 0) {
+      me.jumpT -= dt;
+      if (me.jumpT <= 0) {
+        if (overFence(me.x, me.y, this.R)) me.jumpT = 0.05;
+        else { me.jumpT = 0; me.jumpCd = JUMP.cooldown; }
+      }
+    }
+    let sp: number;
+    if (this.role === 'sixseven') {
+      sp = this.phase === 'lockin' ? SPEED.monsterPlayer * (this.ev.rage ? EVENTS.rageSpeed : 1) * (this.ev.power ? 1 : 1.1) : SPEED.walk;
+    } else sp = this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : SPEED.walk;
+    if (mv.dx || mv.dy) {
+      [me.x, me.y] = move(me.x, me.y, mv.dx * sp * dt, mv.dy * sp * dt, this.R, this.doors, { ghost: this.npc, airborne: me.jumpT > 0 });
+    }
+  }
+
+  private hintText(): string {
+    const { x, y } = this.me;
+    if (this.phase === 'lobby') return 'Walk around while you wait. Space to jump.';
+    if (this.npc) return 'NPC mode: stand next to a living bro to get revived';
+    let best: { plot: number; side: DoorSide; d: number } | null = null;
+    for (const c of this.cribs.values()) {
+      for (const side of [0, 1] as DoorSide[]) {
+        const [dx, dy] = doorCenter(c.i, side);
+        const d = dist(x, y, dx, dy);
+        if (d < 1.7 && (!best || d < best.d)) best = { plot: c.i, side, d };
+      }
+    }
+    const sideName = (s: DoorSide) => (s === 0 ? 'front' : 'back');
+    if (this.role === 'sixseven') {
+      if (best && doorBlocks(this.doors(best.plot, best.side))) return 'E: smash the door';
+      return this.phase === 'lockin' ? 'Listen for noise ripples. Touch a bro to 67 them.' : 'The night starts soon. Get ready.';
+    }
+    if (!this.ev.power && dist(x, y, GENERATOR_POS[0], GENERATOR_POS[1]) < EVENTS.generatorRange) return `Hold R: fix the generator (${Math.round(this.ev.powerFix * 100)}%)`;
+    if (best) {
+      const c = this.cribs.get(best.plot)!;
+      const d = c.doors[best.side];
+      if (c.i === this.myCrib) {
+        if (d.hp < DOOR.maxHp) return `Hold R: repair your ${sideName(best.side)} door (${d.hp}%)  ·  E: open it`;
+        return d.open ? 'Your door is open. It closes by itself.' : `E: open your ${sideName(best.side)} door`;
+      }
+      if (doorBlocks(d)) return `E: knock on ${c.ownerName}'s ${sideName(best.side)} door`;
+    }
+    for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      if (cellAt(Math.floor(x + ox * 0.9), Math.floor(y + oy * 0.9), this.R).kind === 'fence') return 'Space: jump the fence (Sixsevens have to go around)';
+    }
+    if (this.phase === 'pregame') return 'Grab purple aura drops, then get to your crib';
+    if (cribAtPos(x, y, this.R) === this.myCrib) return 'F: ring light  ·  Shift is loud  ·  doors stay locked unless you open them';
+    return '';
+  }
+
+  private loop(now: number) {
+    this.raf = requestAnimationFrame(this.loop);
+    const dt = Math.min(0.05, (now - (this.lastFrame || now)) / 1000);
+    this.lastFrame = now;
+    this.predict(dt);
+    const ents = this.interpolated();
+    const self = ents.find((e) => e.id === this.selfId);
+    if (self && this.me.init) {
+      self.x = this.me.x;
+      self.y = this.me.y;
+      if (this.role === 'bro' && !this.npc) self.z = this.me.jumpT > 0 ? Math.sin(Math.PI * (1 - this.me.jumpT / JUMP.sec)) * JUMP.height : 0;
+    }
+    // the Sixseven chant when one is close
+    if (this.role === 'bro') {
+      let nearest = Infinity;
+      let near: EntView | null = null;
+      for (const e of ents) {
+        if (e.k !== 'sixseven') continue;
+        const d = dist(e.x, e.y, this.me.x, this.me.y);
+        if (d < nearest) { nearest = d; near = e; }
+      }
+      if (near) {
+        chant(nearest);
+        if (nearest < 9 && now - this.lastPop > 700) {
+          this.lastPop = now;
+          renderer.popText(near.x, near.y, Math.floor(now / 700) % 2 ? '7' : '6');
+        }
+      }
+    }
+    renderer.frame(ents, this.selfId, this.me, this.ev, this.role === 'sixseven');
+    hud.timer(this.phase, this.phaseEnd, this.night, this.counts);
+    hud.hint(this.hintText());
+    hud.tickKnock();
+    if (this.scoresOpen && now - this.scoreTimer > 1000) { this.scoreTimer = now; this.send({ t: 'scores' }); }
+  }
+  private lastFrame = 0;
+}
+
+input.onAction = (a) => game?.action(a);
+$('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); game?.action('chat'); }
+  if (e.key === 'Escape') { hud.closeChat(); input.enabled = true; }
+  e.stopPropagation();
+});
+
+// ======================================================================
+// Menu, accounts, captcha
+// ======================================================================
+
+function showError(msg: string) { $('menu-error').textContent = msg; }
+
+function showMenu(error = '') {
+  game = null;
+  hud.show(false);
+  hud.closeChat();
+  input.enabled = true;
+  $('menu').classList.remove('hidden');
+  showError(error);
+  void refreshLobbies();
+}
+
+function startGame(opts: JoinOpts) {
+  sfx.unlock();
+  showError('');
+  game?.leave();
+  $('menu').classList.add('hidden');
+  hud.show(true);
+  game = new Game(opts);
+}
+
+const role = (): Role => ($<HTMLSelectElement>('role-select').value === 'sixseven' ? 'sixseven' : 'bro');
+
+async function refreshLobbies() {
+  const ul = $('lobby-list');
+  try {
+    const { lobbies } = await api.lobbies();
+    ul.replaceChildren();
+    for (const l of lobbies) {
+      const li = document.createElement('li');
+      const left = document.createElement('div');
+      const name = document.createElement('b');
+      name.textContent = l.name;
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = `${l.players} playing · ${l.phase === 'lobby' ? 'waiting to start' : l.phase === 'lockin' ? 'night in progress (drop in)' : 'between nights'}`;
+      left.append(name, meta);
+      const b = document.createElement('button');
+      b.className = 'small';
+      b.textContent = 'Join';
+      b.onclick = () => startGame(l.quick ? { mode: 'quick', role: role() } : { mode: 'join', code: l.code, role: role() });
+      li.append(left, b);
+      ul.appendChild(li);
+    }
+  } catch {
+    ul.textContent = 'Could not load lobbies.';
+  }
+}
+
+function renderAccount() {
+  if (!account) return;
+  const a = account;
+  $('account-status').textContent = a.username
+    ? `Signed in as ${a.username}. You can sign in on any device with your password.`
+    : 'Guest account on this device. Add a login to keep it if you switch devices.';
+  $('sec-current').classList.toggle('hidden', !a.hasPassword);
+  $<HTMLInputElement>('sec-user').value = a.username ?? '';
+  $('form-secure').querySelector('button')!.textContent = a.hasPassword ? 'Change login' : 'Save login';
+  const s = a.stats;
+  $('account-msg').textContent = `Nights played ${s.nights} · wins ${s.wins} · mogs ${s.mogs} · revives ${s.revives} · catches ${s.catches}`;
+}
+
+function enterMain(a: Account) {
+  account = a;
+  $('captcha-box').classList.add('hidden');
+  $('menu-main').classList.remove('hidden');
+  $<HTMLInputElement>('name-input').value = a.name;
+  renderAccount();
+  void refreshLobbies();
+  const join = new URLSearchParams(location.search).get('join');
+  if (join) {
+    history.replaceState(null, '', location.pathname);
+    startGame({ mode: 'join', code: join, role: role() });
+  }
+}
+
+async function runCaptcha() {
+  $('captcha-box').classList.remove('hidden');
+  const status = $('captcha-status');
+  const cfg = await api.captcha();
+  if (cfg.kind === 'turnstile') {
+    $('pow-check').classList.add('hidden');
+    await loadTurnstile();
+    window.turnstile!.render($('turnstile-slot'), {
+      sitekey: cfg.siteKey,
+      theme: 'dark',
+      callback: async (token) => {
+        try {
+          const r = await api.guest({ turnstile: token });
+          setToken(r.token);
+          enterMain(r.account);
+        } catch (e) { status.textContent = (e as Error).message; }
+      },
+    });
+    return;
+  }
+  const box = $<HTMLInputElement>('pow-input');
+  box.checked = false;
+  box.disabled = false;
+  box.onchange = async () => {
+    if (!box.checked) return;
+    box.disabled = true;
+    status.textContent = 'Checking your aura...';
+    try {
+      const fresh = await api.captcha();
+      if (fresh.kind !== 'pow') return;
+      const nonce = await solvePow(fresh.challenge, fresh.bits);
+      const r = await api.guest({ challenge: fresh.challenge, nonce });
+      setToken(r.token);
+      status.textContent = '';
+      enterMain(r.account);
+    } catch (e) {
+      status.textContent = (e as Error).message;
+      box.checked = false;
+      box.disabled = false;
+    }
+  };
+}
+
+async function boot() {
+  const savedRole = ls.get('brochase.role');
+  if (savedRole) $<HTMLSelectElement>('role-select').value = savedRole;
+  if (getToken()) {
+    try {
+      const { account: a } = await api.me();
+      enterMain(a);
+      return;
+    } catch {
+      setToken(null);
+    }
+  }
+  await runCaptcha().catch((e) => showError((e as Error).message));
+}
+
+// ----- menu wiring -----
+document.querySelectorAll<HTMLButtonElement>('.tab').forEach((t) => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
+    document.querySelectorAll('.tab-body').forEach((b) => b.classList.toggle('hidden', b.id !== t.dataset.tab));
+  };
+});
+$('role-select').onchange = () => ls.set('brochase.role', role());
+let nameTimer = 0;
+$('name-input').oninput = () => {
+  clearTimeout(nameTimer);
+  nameTimer = window.setTimeout(async () => {
+    try {
+      const r = await api.setName($<HTMLInputElement>('name-input').value);
+      account = r.account;
+      showError('');
+    } catch (e) { showError((e as Error).message); }
+  }, 500);
+};
+$('btn-quick').onclick = () => startGame({ mode: 'quick', role: role() });
+$('btn-refresh').onclick = () => void refreshLobbies();
+$('btn-create').onclick = () => startGame({
+  mode: 'create', role: role(), name: $<HTMLInputElement>('lobby-name').value || undefined,
+  priv: $<HTMLInputElement>('lobby-private').checked,
+});
+$('btn-join').onclick = () => {
+  const code = $<HTMLInputElement>('join-code').value.trim().toUpperCase();
+  if (code.length !== 6) return showError('Invite codes are 6 characters.');
+  startGame({ mode: 'join', code, role: role() });
+};
+$('form-secure').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api.credentials($<HTMLInputElement>('sec-user').value, $<HTMLInputElement>('sec-pass').value, $<HTMLInputElement>('sec-current').value || undefined);
+    account = r.account;
+    $<HTMLInputElement>('sec-pass').value = '';
+    $<HTMLInputElement>('sec-current').value = '';
+    renderAccount();
+    $('account-msg').textContent = 'Saved. You can now sign in on other devices.';
+  } catch (err) { $('account-msg').textContent = (err as Error).message; }
+};
+$('form-login').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api.login($<HTMLInputElement>('login-user').value, $<HTMLInputElement>('login-pass').value);
+    setToken(r.token);
+    enterMain(r.account);
+    $('account-msg').textContent = 'Signed in. This device is now linked to your account.';
+  } catch (err) { $('account-msg').textContent = (err as Error).message; }
+};
+$('btn-logout').onclick = async () => {
+  if (account && !account.hasPassword && !confirm('This guest account has no password. Signing out loses it for good. Continue?')) return;
+  try { await api.logout(); } catch { /* ignore */ }
+  setToken(null);
+  account = null;
+  $('menu-main').classList.add('hidden');
+  void runCaptcha();
+};
+
+// ----- HUD wiring -----
+$('btn-leave').onclick = () => { game?.leave(); showMenu(); };
+$('btn-start').onclick = () => game?.send({ t: 'start' });
+$('btn-role-bro').onclick = () => game?.send({ t: 'role', role: 'bro' });
+$('btn-role-six').onclick = () => game?.send({ t: 'role', role: 'sixseven' });
+$('btn-copy').onclick = async () => {
+  const code = game?.lobby?.code;
+  if (!code) return;
+  const link = `${location.origin}/?join=${code}`;
+  try { await navigator.clipboard.writeText(link); $('btn-copy').textContent = 'Copied!'; } catch { prompt('Invite link', link); }
+  setTimeout(() => { $('btn-copy').textContent = 'Copy link'; }, 1500);
+};
+
+if ('ontouchstart' in window || navigator.maxTouchPoints > 0) input.setupTouch($('touch'));
+
+void boot();
