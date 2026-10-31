@@ -4,7 +4,8 @@ import { Renderer } from './render.ts';
 import { Hud } from './hud.ts';
 import { Input, type Action } from './input.ts';
 import { chant, sfx } from './audio.ts';
-import { EVENTS, ITEM, JUMP, SPEED } from '../../shared/constants.ts';
+import { EVENTS, ITEM, SPEED } from '../../shared/constants.ts';
+import { airborne, freshJump, kicksSpeed, stepJump, tryJump } from '../../shared/gear.ts';
 import {
   cellAt, cribAtPos, dist, doorBlocks, doorCenter, move, overFence, type CribView, type DoorSide,
 } from '../../shared/world.ts';
@@ -45,7 +46,8 @@ class Game {
   counts = { bros: 0, alive: 0, opps: 0 };
   cribs = new Map<number, CribView>();
   snaps: Snap[] = [];
-  me = { x: 0, y: 0, jumpT: 0, jumpCd: 0, init: false };
+  me = { x: 0, y: 0, jump: freshJump(), init: false };
+  kicks = 0;
   npc = false;
   stunned = false;
   lightOn = false;
@@ -148,6 +150,7 @@ class Game {
     this.aura = m.you.aura;
     hud.wallet(m.you);
     this.drink = m.you.drink;
+    this.kicks = m.you.kicks ?? 0;
     renderer.setProps(m.props);
     renderer.setDefs(m.defs);
     if (m.R !== this.R || !this.me.init) { this.R = m.R; renderer.buildWorld(m.R); }
@@ -205,10 +208,7 @@ class Game {
   action(a: Action) {
     switch (a) {
       case 'jump':
-        if (this.role === 'bro' && !this.npc && this.me.jumpT <= 0 && this.me.jumpCd <= 0) {
-          this.me.jumpT = this.ev.lowgrav ? JUMP.lowGravSec : JUMP.sec;
-          sfx.jump();
-        }
+        if (this.role === 'bro' && !this.npc && tryJump(this.me.jump, this.kicks, this.ev.lowgrav)) sfx.jump();
         this.send({ t: 'jump' });
         break;
       case 'light': this.send({ t: 'light' }); sfx.light(); break;
@@ -275,20 +275,13 @@ class Game {
     }
     if (!this.me.init || this.stunned) return;
     const me = this.me;
-    me.jumpCd = Math.max(0, me.jumpCd - dt);
-    if (me.jumpT > 0) {
-      me.jumpT -= dt;
-      if (me.jumpT <= 0) {
-        if (overFence(me.x, me.y, this.R)) me.jumpT = 0.05;
-        else { me.jumpT = 0; me.jumpCd = JUMP.cooldown; }
-      }
-    }
+    stepJump(me.jump, dt, this.ev.lowgrav, overFence(me.x, me.y, this.R));
     let sp: number;
     if (this.role === 'opp') {
       sp = this.phase === 'lockin' ? SPEED.monsterPlayer * (this.ev.rage ? EVENTS.rageSpeed : 1) * (this.ev.power ? 1 : 1.1) : SPEED.walk;
-    } else sp = (this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : mv.sneak ? SPEED.sneak : SPEED.walk) * (this.drink > 0 && !this.npc ? ITEM.drinkSpeed : 1);
+    } else sp = (this.npc ? SPEED.npc : mv.zoom ? SPEED.zoom : mv.sneak ? SPEED.sneak : SPEED.walk) * (this.drink > 0 && !this.npc ? ITEM.drinkSpeed : 1) * (this.npc ? 1 : kicksSpeed(this.kicks));
     if (mv.dx || mv.dy) {
-      [me.x, me.y] = move(me.x, me.y, mv.dx * sp * dt, mv.dy * sp * dt, this.R, this.doors, { ghost: this.npc, airborne: me.jumpT > 0 });
+      [me.x, me.y] = move(me.x, me.y, mv.dx * sp * dt, mv.dy * sp * dt, this.R, this.doors, { ghost: this.npc, airborne: airborne(me.jump) });
     }
   }
 
@@ -335,8 +328,7 @@ class Game {
     if (self && this.me.init) {
       self.x = this.me.x;
       self.y = this.me.y;
-      const js = this.ev.lowgrav ? JUMP.lowGravSec : JUMP.sec, jh = this.ev.lowgrav ? JUMP.lowGravHeight : JUMP.height;
-      if (this.role === 'bro' && !this.npc) self.z = this.me.jumpT > 0 ? Math.max(0, Math.sin(Math.PI * (1 - this.me.jumpT / js))) * jh : 0;
+      if (this.role === 'bro' && !this.npc) self.z = this.me.jump.z;
     }
     // the Opp chant when one is close
     if (this.role === 'bro') {

@@ -189,7 +189,7 @@ test('a mid-air bro cannot be caught', () => {
   lockIn(r, a.id);
   const pa = r.players.get(a.id)!;
   r.handle(a.id, { t: 'jump' });
-  assert.ok(pa.jumpT > 0);
+  assert.ok(pa.jump.z > 0);
   const ai = r.ais[0];
   ai.x = pa.x + 0.2; ai.y = pa.y;
   (r as any).hunterChecks(ai, Date.now() / 1000);

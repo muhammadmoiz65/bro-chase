@@ -2,7 +2,7 @@
 // Everything user-written is set with textContent, never innerHTML.
 
 import type { FeedItem, LobbyInfo, Phase, Role, ScoreRow, SelfView, WorldEvents } from '../../shared/protocol.ts';
-import { DEF, DEF_KINDS, DEFENCE, SHOP, type DefKind, type ShopId } from '../../shared/constants.ts';
+import { DEF, DEF_KINDS, DEFENCE, GEAR, SHOP, type DefKind, type ShopId } from '../../shared/constants.ts';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -87,6 +87,8 @@ export class Hud {
     const fx: string[] = [];
     if (you.drink) fx.push(`ENERGY DRINK ${you.drink}s`);
     if (you.bribe) fx.push(`BRIBED ${you.bribe}s`);
+    if (you.vest) fx.push(`ARMOUR ${'◆'.repeat(you.shields)}${'◇'.repeat(Math.max(0, GEAR.vest[you.vest].shields - you.shields))}`);
+    if (you.kicks) fx.push(GEAR.kicks[you.kicks].airJumps > 1 ? 'TRIPLE JUMP' : 'DOUBLE JUMP');
     $('effects').textContent = fx.join(' · ');
     const bro = you.role === 'bro';
     $('wallet').classList.toggle('hidden', !bro);
@@ -125,7 +127,7 @@ export class Hud {
     const you = this.you;
     if (!you) return;
     const list = $('shop-list');
-    const rows: ShopId[] = ['armor', 'autorepair', 'trap', 'drink', 'decoy', 'bribe', 'aura'];
+    const rows: ShopId[] = ['kicks', 'vest', 'armor', 'autorepair', 'trap', 'drink', 'decoy', 'bribe', 'aura'];
     list.replaceChildren();
     list.appendChild(el('h3', 'shop-sec', `Defences (${you.defCount}/${DEF.maxPerCrib} built) · built where you stand, in or around your crib`));
     for (const k of DEF_KINDS) {
@@ -155,6 +157,11 @@ export class Hud {
       if (id === 'armor') {
         price = you.armor >= 3 ? null : (def.price as number[])[you.armor];
         label = `${def.name} (level ${you.armor}/3)`;
+      } else if (id === 'kicks' || id === 'vest') {
+        const tier = you[id] ?? 0;
+        const tiers = GEAR[id];
+        price = tier >= GEAR.maxTier ? null : (def.price as number[])[tier];
+        label = tier >= GEAR.maxTier ? `${tiers[tier].name} (max)` : tier ? `${tiers[tier].name} → ${tiers[tier + 1].name}` : `${def.name}: ${tiers[1].name}`;
       } else if (id === 'autorepair') price = you.autorepair ? null : (def.price as number);
       else price = def.price as number;
       if (id in you.inv) label += ` (have ${you.inv[id as keyof SelfView['inv']]})`;
